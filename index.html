@@ -360,14 +360,19 @@ const CATEGORY_META = {
   'Debt Service':{label:'Debt Service (min)', slot:'--slot-8'}
 };
 
+// Skip rules are checked first (in classify()) so an internal transfer or debt
+// payment is never miscategorized into a spending bucket by an incidental
+// keyword collision (e.g. "Internet Access" inside a transfer memo vs. an
+// actual internet bill).
 const CATEGORY_RULES = [
+  [/autopay|card\s?payment|credit\s?card|credit\s?crd|loan\s?pymt|loan\s?payment|to\s+loan\b|thank\s?you.*payment|payment.*thank\s?you|capital\s?one\s?pymt|discover\s?pymt/i, 'Skip'],
+  [/home\s?banking\s?transfer|internal\s?transfer/i, 'Skip'],
+  [/payroll|direct\s?dep|deposit|refund|interest\s?earned|transfer\s?in/i, 'Skip'],
   [/rent|mortgage|apartment|property\s?mgmt|landlord/i, 'Housing'],
-  [/electric|power\s?co|water\s?dept|water\s?utility|\binternet\b|xfinity|comcast|spectrum|at&t|verizon|natural\s?gas|utility|utilities/i, 'Utilities'],
+  [/electric|power\s?co|water\s?dept|water\s?utility|\binternet\b|xfinity|comcast|spectrum|at&t|verizon|natural\s?gas|utility|utilities|\baes\s?ohio\b|duke\s?energy|dominion|con\s?edison|national\s?grid|ez\s?pay/i, 'Utilities'],
   [/kroger|whole\s?foods|trader\s?joe|safeway|aldi|walmart\s?(supercenter)?|publix|grocery|market\s?basket|harris\s?teeter/i, 'Groceries'],
   [/netflix|spotify|hulu|disney\+|hbo|apple\.com\/bill|youtube\s?premium|gym|planet\s?fitness|prime\s?video|audible|subscription|icloud/i, 'Subscriptions'],
-  [/doordash|uber\s?eats|grubhub|starbucks|chipotle|restaurant|cafe|pizza|taco|bar\s?tab|takeout/i, 'Dining'],
-  [/autopay|card\s?payment|loan\s?pymt|loan\s?payment|thank\s?you.*payment|payment.*thank\s?you|capital\s?one\s?pymt|discover\s?pymt/i, 'Skip'],
-  [/payroll|direct\s?dep|deposit|refund|interest\s?earned|transfer\s?in/i, 'Skip']
+  [/doordash|uber\s?eats|grubhub|starbucks|chipotle|restaurant|cafe|pizza|taco|bar\s?tab|takeout|mcdonald/i, 'Dining']
 ];
 
 const state = {
@@ -455,8 +460,20 @@ function parseCSVText(text){
   return rows.filter(r => r.some(c => c.trim() !== ''));
 }
 
-function looksLikeHeaderRow(row){
-  return row.some(c => /^\s*(date|description|payee|memo|merchant|name|amount|debit|credit|withdrawal|deposit|category)\s*$/i.test(c));
+const HEADER_WORD_RE = /^\s*(date|description|payee|memo|notes|merchant|name|amount|debit|credit|withdrawal|deposit|category|transaction)/i;
+
+// Bank/credit-union exports often carry a few "Account Name: …" style metadata
+// lines before the real header row, so scan the first several rows for the
+// one that actually looks like column headers rather than assuming row 0.
+function findHeaderRowIndex(rows){
+  const scanLimit = Math.min(rows.length, 15);
+  for (let i = 0; i < scanLimit; i++){
+    const row = rows[i];
+    if (row.length < 2) continue;
+    const hits = row.filter(c => HEADER_WORD_RE.test(c.trim())).length;
+    if (hits >= 2) return i;
+  }
+  return -1;
 }
 function findColumn(headerNorm, names){
   for (const n of names){
@@ -467,12 +484,18 @@ function findColumn(headerNorm, names){
 }
 function detectColumns(headerRow){
   const norm = headerRow.map(h => h.trim().toLowerCase());
+  const debit = findColumn(norm, ['debit','withdrawal']);
+  const credit = findColumn(norm, ['credit','deposit']);
+  const claimed = new Set([debit, credit].filter(i => i > -1));
+  // Only look for a standalone "amount" column among cells NOT already
+  // claimed by debit/credit — otherwise "Amount Debit"/"Amount Credit"
+  // headers (which contain the word "amount") get misread as one signed column.
+  const amount = norm.findIndex((h, i) => !claimed.has(i) && /amount|value/.test(h));
   return {
     date: findColumn(norm, ['date','transaction date','posted date']),
-    desc: findColumn(norm, ['description','payee','merchant','name','memo']),
-    amount: findColumn(norm, ['amount','value']),
-    debit: findColumn(norm, ['debit','withdrawal']),
-    credit: findColumn(norm, ['credit','deposit'])
+    desc: findColumn(norm, ['description','payee','merchant']),
+    memo: findColumn(norm, ['memo','notes']),
+    amount, debit, credit
   };
 }
 
@@ -495,10 +518,11 @@ function parseFreeformRow(cells, owner){
 
 function rowsToTransactions(rows, owner){
   if (!rows.length) return [];
+  const headerIdx = findHeaderRowIndex(rows);
   let dataRows = rows, cols = null;
-  if (looksLikeHeaderRow(rows[0])){
-    cols = detectColumns(rows[0]);
-    dataRows = rows.slice(1);
+  if (headerIdx > -1){
+    cols = detectColumns(rows[headerIdx]);
+    dataRows = rows.slice(headerIdx + 1);
   }
   const hasAmountCols = cols && (cols.amount > -1 || cols.debit > -1 || cols.credit > -1);
   const out = [];
@@ -508,17 +532,27 @@ function rowsToTransactions(rows, owner){
       if (t) out.push(t);
       continue;
     }
-    let amount;
-    if (cols.amount > -1){
-      amount = parseFloat((r[cols.amount]||'').replace(/[\$,()\s]/g,''));
-    } else {
-      const debit = parseFloat((r[cols.debit]||'').replace(/[\$,()\s]/g,'')) || 0;
-      const credit = parseFloat((r[cols.credit]||'').replace(/[\$,()\s]/g,'')) || 0;
-      amount = debit > 0 ? -Math.abs(debit) : (credit > 0 ? Math.abs(credit) : 0);
+    let amount = 0;
+    if (cols.debit > -1 || cols.credit > -1){
+      // Sign-agnostic: some exports store debit as a positive magnitude,
+      // others (like this one) already store it as a negative number.
+      const debitRaw = cols.debit > -1 ? parseFloat((r[cols.debit]||'').replace(/[\$,()\s]/g,'')) : NaN;
+      const creditRaw = cols.credit > -1 ? parseFloat((r[cols.credit]||'').replace(/[\$,()\s]/g,'')) : NaN;
+      if (!Number.isNaN(debitRaw) && debitRaw !== 0) amount = -Math.abs(debitRaw);
+      else if (!Number.isNaN(creditRaw) && creditRaw !== 0) amount = Math.abs(creditRaw);
+    } else if (cols.amount > -1){
+      const raw = parseFloat((r[cols.amount]||'').replace(/[\$,()\s]/g,''));
+      amount = Number.isNaN(raw) ? 0 : raw;
     }
-    if (!amount || Number.isNaN(amount)) continue;
-    const excluded = new Set([cols.date, cols.amount, cols.debit, cols.credit].filter(i => i > -1));
-    const desc = (cols.desc > -1 ? r[cols.desc] : r.filter((_,i)=>!excluded.has(i)).join(' ')).trim() || 'Transaction';
+    if (!amount) continue;
+    const excluded = new Set([cols.date, cols.amount, cols.debit, cols.credit, cols.memo].filter(i => i > -1));
+    const descCell = cols.desc > -1 ? (r[cols.desc]||'').trim() : '';
+    const memoCell = cols.memo > -1 ? (r[cols.memo]||'').trim() : '';
+    let desc = [descCell, memoCell].filter(Boolean).join(' — ');
+    if (!desc && cols.desc === -1 && cols.memo === -1){
+      desc = r.filter((_,i) => !excluded.has(i)).join(' ').trim();
+    }
+    desc = desc || 'Transaction';
     if (amount > 0 && isIncomeLike(desc)) continue;
     const category = classify(desc);
     if (category === 'Skip') continue;
