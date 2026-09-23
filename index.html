@@ -2,6 +2,21 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@700;800&display=swap">
 <script src="https://cdn.tailwindcss.com"></script>
+<script>
+// If cdnjs specifically is blocked (some corporate/regional networks do this)
+// rather than the network being down entirely, retry Chart.js from jsDelivr
+// instead of just leaving charts broken for the rest of the session.
+window.addEventListener('error', function(e){
+  var t = e.target;
+  if (t && t.tagName === 'SCRIPT' && /Chart\.js/.test(t.src) && !window.__chartFallbackTried){
+    window.__chartFallbackTried = true;
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js';
+    s.onload = function(){ if (typeof window.__rerenderAfterChartLoad === 'function') window.__rerenderAfterChartLoad(); };
+    document.head.appendChild(s);
+  }
+}, true);
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <style>
 :root{
@@ -121,6 +136,13 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
 .rec-row.done{opacity:.55;}
 .rec-row.done .rec-title{text-decoration:line-through;}
 
+.cal-weekday{text-align:center;font-size:.62rem;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.03em;padding-bottom:.25rem;}
+.cal-day{border:1px solid var(--border);border-radius:8px;padding:.3rem;min-height:56px;background:var(--surface);overflow:hidden;}
+.cal-day.today{border-color:var(--accent);border-width:1.5px;}
+.cal-day.empty{border-color:transparent;background:transparent;}
+.cal-daynum{font-size:.62rem;color:var(--ink-3);font-variant-numeric:tabular-nums;}
+.cal-day.today .cal-daynum{color:var(--accent);font-weight:700;}
+.cal-item{font-size:.6rem;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 
 .chart-wrap{position:relative;width:100%;}
 
@@ -167,14 +189,14 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
             <span class="field-label">You</span>
             <div class="flex items-center gap-1 mt-1">
               <span class="text-[var(--ink-3)] text-sm">$</span>
-              <input id="incomeYou" type="number" min="0" step="50" class="input tnum" value="4800">
+              <input id="incomeYou" type="number" min="0" step="50" class="input tnum" value="0">
             </div>
           </label>
           <label class="block">
             <span class="field-label">Spouse</span>
             <div class="flex items-center gap-1 mt-1">
               <span class="text-[var(--ink-3)] text-sm">$</span>
-              <input id="incomeSpouse" type="number" min="0" step="50" class="input tnum" value="3100">
+              <input id="incomeSpouse" type="number" min="0" step="50" class="input tnum" value="0">
             </div>
           </label>
         </div>
@@ -184,7 +206,6 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
       <section class="card p-4 space-y-3">
         <div class="flex items-center justify-between">
           <h2 class="font-display font-bold text-sm">Import transactions</h2>
-          <span class="text-[.65rem] text-[var(--ink-3)]">sample data loaded</span>
         </div>
         <p class="text-xs text-[var(--ink-2)]">Upload a CSV export (Date/Description/Amount, or Debit/Credit columns) or paste transactions directly. We auto-sort each one into Housing, Groceries, Utilities, Subscriptions, Dining or Misc.</p>
 
@@ -274,9 +295,27 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
           <span class="field-label">Extra toward debt / mo</span>
           <div class="flex items-center gap-1 mt-1">
             <span class="text-[var(--ink-3)] text-sm">$</span>
-            <input id="extraPayment" type="number" min="0" step="25" class="input tnum" value="500">
+            <input id="extraPayment" type="number" min="0" step="25" class="input tnum" value="0">
           </div>
         </label>
+      </section>
+
+      <section class="card p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="font-display font-bold text-sm">Recurring bills</h2>
+          <span id="billCountLabel" class="text-[.65rem] text-[var(--ink-3)]"></span>
+        </div>
+        <p class="text-xs text-[var(--ink-2)]">Set a due day for each recurring bill and we'll match it against your imported transactions on the calendar.</p>
+        <div id="billList" class="space-y-2"></div>
+        <details class="pt-1">
+          <summary class="text-xs font-semibold text-[var(--accent)] cursor-pointer select-none">+ Add a bill</summary>
+          <div class="grid grid-cols-2 gap-2 mt-2">
+            <input id="newBillName" placeholder="Name (e.g. Electric)" class="input col-span-2 text-xs">
+            <select id="newBillCategory" class="input text-xs"></select>
+            <input id="newBillDueDay" type="number" min="1" max="31" placeholder="Due day" class="input text-xs tnum">
+            <button id="addBillBtn" class="btn btn-primary text-xs col-span-2 py-2">Add bill</button>
+          </div>
+        </details>
       </section>
     </aside>
 
@@ -327,6 +366,23 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
         </div>
         <div class="chart-wrap" style="height:260px"><canvas id="payoffChart"></canvas></div>
         <div id="payoffSummary" class="grid grid-cols-2 gap-3 mt-3 text-xs"></div>
+      </section>
+
+      <section class="card p-4">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="font-display font-bold text-sm">Bill calendar</h3>
+          <div class="flex items-center gap-1.5">
+            <button id="calPrev" class="btn-ghost btn text-xs w-6 h-6 flex items-center justify-center p-0" aria-label="Previous month">‹</button>
+            <span id="calLabel" class="text-xs font-semibold w-28 text-center tnum"></span>
+            <button id="calNext" class="btn-ghost btn text-xs w-6 h-6 flex items-center justify-center p-0" aria-label="Next month">›</button>
+          </div>
+        </div>
+        <p class="text-[.7rem] text-[var(--ink-3)] mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full inline-block" style="background:var(--accent)"></span>due, not yet paid</span>
+          <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full inline-block" style="background:var(--good)"></span>paid</span>
+          <span>colored amount = vs. last cycle</span>
+        </p>
+        <div id="calGrid" class="grid grid-cols-7 gap-1"></div>
       </section>
 
       <section class="card p-4">
@@ -429,7 +485,7 @@ const CATEGORY_RULES = [
 ];
 
 const state = {
-  income: { you: 4800, spouse: 3100 },
+  income: { you: 0, spouse: 0 },
   transactions: [],
   categories: {},
   categoryDefs: [
@@ -440,52 +496,13 @@ const state = {
     { key: 'Subscriptions', label: 'Subscriptions', slot: '--slot-5' },
     { key: 'Misc',          label: 'Miscellaneous', slot: '--slot-7' }
   ],
-  debts: [
-    {id: uid(), name:'Sundance Visa', balance:4200, apr:24.99, minPayment:120},
-    {id: uid(), name:'Target RedCard', balance:1150, apr:26.99, minPayment:45},
-    {id: uid(), name:'Auto Loan', balance:9800, apr:6.4, minPayment:310},
-    {id: uid(), name:'Student Loan', balance:15600, apr:5.2, minPayment:180}
-  ],
+  debts: [],
   strategy: 'avalanche',
-  extraPayment: 500,
+  extraPayment: 0,
   investReturnRate: 0.07,
-  pendingProposal: null
+  pendingProposal: null,
+  bills: []
 };
-
-const SAMPLE_YOU = [
-  "09/02/2026, Northgate Apartments LLC, -1450.00",
-  "09/03/2026, Whole Foods Mkt, -96.40",
-  "09/04/2026, City Water & Power, -142.10",
-  "09/05/2026, Netflix.com, -17.99",
-  "09/06/2026, Starbucks, -8.45",
-  "09/07/2026, Chipotle Mexican Grill, -14.20",
-  "09/08/2026, Payroll Direct Deposit, 2400.00",
-  "09/10/2026, Kroger, -110.75",
-  "09/11/2026, DoorDash, -38.60",
-  "09/12/2026, Xfinity Internet, -89.99",
-  "09/14/2026, Spotify Premium, -11.99",
-  "09/15/2026, Target, -64.30",
-  "09/16/2026, Sundance Visa Payment Thank You, -120.00",
-  "09/18/2026, Planet Fitness, -24.99",
-  "09/20/2026, Amazon.com, -52.10",
-  "09/22/2026, Payroll Direct Deposit, 2400.00"
-].join("\n");
-
-const SAMPLE_SPOUSE = [
-  "09/02/2026, Trader Joe's, -74.20",
-  "09/03/2026, City Water & Power (2nd unit), -58.00",
-  "09/04/2026, Uber Eats, -29.80",
-  "09/06/2026, AT&T Wireless, -95.00",
-  "09/07/2026, Payroll Direct Deposit, 1550.00",
-  "09/09/2026, Auto Loan Autopay, -310.00",
-  "09/11/2026, Safeway, -88.15",
-  "09/12/2026, Disney+, -13.99",
-  "09/14/2026, Chipotle, -19.40",
-  "09/16/2026, Student Loan Payment Thank You, -180.00",
-  "09/18/2026, Target RedCard Pymt, -45.00",
-  "09/20/2026, iCloud Storage, -2.99",
-  "09/21/2026, Payroll Direct Deposit, 1550.00"
-].join("\n");
 
 // ---------- parsing ----------
 function classify(desc){
@@ -493,6 +510,31 @@ function classify(desc){
   return 'Misc';
 }
 function isIncomeLike(desc){ return /payroll|direct\s?dep|deposit|refund|interest\s?earned|transfer\s?in/i.test(desc); }
+
+// Lenient date parsing for transaction rows: handles MM/DD/YYYY, MM/DD/YY,
+// and ISO YYYY-MM-DD; anything else falls through to the Date constructor.
+// Stored as a plain YYYY-MM-DD string (not a Date object) so calendar-day
+// comparisons never fall prey to timezone drift.
+function parseDateLoose(str){
+  if (!str) return null;
+  const s = String(str).trim();
+  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (m){
+    const mo = +m[1], da = +m[2];
+    const yr = m[3].length === 2 ? 2000 + (+m[3]) : +m[3];
+    if (mo>=1 && mo<=12 && da>=1 && da<=31) return `${yr}-${String(mo).padStart(2,'0')}-${String(da).padStart(2,'0')}`;
+    return null;
+  }
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return null;
+}
+function dateToISO(d){
+  if (!d || isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
 
 // Quote-aware CSV tokenizer: handles "Field, with comma" and "" escaped quotes.
 function parseCSVText(text){
@@ -574,7 +616,9 @@ function parseFreeformRow(cells, owner){
   if (amount > 0 && isIncomeLike(desc)) return null;
   const category = classify(desc);
   if (category === 'Skip') return null;
-  return { id: uid(), owner, desc, amount: Math.abs(amount), category };
+  const dateMatch = raw.match(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/);
+  const dateISO = dateMatch ? parseDateLoose(dateMatch[0]) : null;
+  return { id: uid(), owner, desc, amount: Math.abs(amount), category, dateISO };
 }
 
 function rowsToTransactions(rows, owner){
@@ -617,7 +661,8 @@ function rowsToTransactions(rows, owner){
     if (amount > 0 && isIncomeLike(desc)) continue;
     const category = classify(desc);
     if (category === 'Skip') continue;
-    out.push({ id: uid(), owner, desc, amount: Math.abs(amount), category });
+    const dateISO = cols.date > -1 ? parseDateLoose(r[cols.date]) : null;
+    out.push({ id: uid(), owner, desc, amount: Math.abs(amount), category, dateISO });
   }
   return out;
 }
@@ -776,8 +821,12 @@ function renderAll(flashNames){
   document.getElementById('legFree').textContent = fmtUSD(d.freeCash);
 
   renderDebtList();
-  renderCatChart(d);
-  renderPayoffChart(d);
+  // Chart.js loads from a CDN and can fail on some networks — never let that
+  // take the rest of the dashboard down with it (stat tiles above are more
+  // important than either chart, and recommendations/strategy below still
+  // need to render either way).
+  try { renderCatChart(d); } catch (e){ console.error('renderCatChart failed:', e); chartFallback('catChart'); }
+  try { renderPayoffChart(d); } catch (e){ console.error('renderPayoffChart failed:', e); chartFallback('payoffChart'); }
   renderRecommendations(d);
   document.getElementById('strategyHint').textContent = state.strategy==='avalanche'
     ? 'Pays the highest interest rate first — usually the least total interest.'
@@ -858,6 +907,109 @@ function renderTxnList(){
   });
 }
 
+// ---------- recurring bills & calendar ----------
+function populateBillCategorySelect(){
+  const sel = document.getElementById('newBillCategory');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">No category</option>' + categoryKeys().map(k=>`<option value="${escapeHtml(k)}">${escapeHtml(categoryMeta(k).label)}</option>`).join('');
+  if (categoryKeys().includes(prev)) sel.value = prev;
+}
+
+function renderBillList(){
+  const wrap = document.getElementById('billList');
+  if (!wrap) return;
+  document.getElementById('billCountLabel').textContent = state.bills.length + ' tracked';
+  if (!state.bills.length){
+    wrap.innerHTML = '<p class="text-xs text-[var(--ink-3)]">No recurring bills yet — add one below.</p>';
+    return;
+  }
+  wrap.innerHTML = state.bills.slice().sort((a,b)=>a.dueDay-b.dueDay).map(b => `
+    <div class="card-soft p-2.5 flex items-center justify-between gap-2">
+      <div class="min-w-0">
+        <p class="text-sm font-semibold truncate">${escapeHtml(b.name)}</p>
+        <p class="text-xs text-[var(--ink-3)]">Due day ${b.dueDay}${b.category ? ' · ' + escapeHtml(categoryMeta(b.category).label) : ''}</p>
+      </div>
+      <button class="text-[var(--ink-3)] hover:text-[var(--critical)] shrink-0" data-del-bill="${b.id}" aria-label="Remove ${escapeHtml(b.name)}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>`).join('');
+  wrap.querySelectorAll('[data-del-bill]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      state.bills = state.bills.filter(b=>b.id!==btn.dataset.delBill);
+      renderBillList();
+      renderCalendar();
+    });
+  });
+}
+
+// A recurring bill "matches" a transaction by a case-insensitive substring
+// of its description — the same lightweight approach the category rules
+// use, and transparent enough for the user (or the coach) to predict.
+function billMatchesDesc(bill, desc){
+  return desc.toLowerCase().includes(bill.name.trim().toLowerCase());
+}
+function txnsForBillInMonth(bill, year, month){
+  const prefix = `${year}-${String(month+1).padStart(2,'0')}`;
+  return state.transactions.filter(t => t.dateISO && t.dateISO.startsWith(prefix) && billMatchesDesc(bill, t.desc));
+}
+function billCycleAmount(bill, year, month){
+  const txns = txnsForBillInMonth(bill, year, month);
+  if (!txns.length) return null;
+  return { amount: txns.reduce((s,t)=>s+t.amount,0), date: txns.map(t=>t.dateISO).sort().slice(-1)[0] };
+}
+
+let calCursor = new Date(TODAY.getFullYear(), TODAY.getMonth(), 1);
+function renderCalendar(){
+  const grid = document.getElementById('calGrid');
+  if (!grid) return;
+  const year = calCursor.getFullYear(), month = calCursor.getMonth();
+  document.getElementById('calLabel').textContent = calCursor.toLocaleDateString('en-US', {month:'long', year:'numeric'});
+
+  const firstDow = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month+1, 0).getDate();
+  const todayISO = dateToISO(TODAY);
+
+  const billInfo = state.bills.map(bill => {
+    const cur = billCycleAmount(bill, year, month);
+    let prevMonth = month - 1, prevYear = year;
+    if (prevMonth < 0){ prevMonth = 11; prevYear = year - 1; }
+    const prev = billCycleAmount(bill, prevYear, prevMonth);
+    const delta = (cur && prev) ? cur.amount - prev.amount : null;
+    return { bill, cur, delta };
+  });
+
+  const cells = ['S','M','T','W','T','F','S'].map(l => `<div class="cal-weekday">${l}</div>`);
+  for (let i = 0; i < firstDow; i++) cells.push('<div class="cal-day empty"></div>');
+
+  for (let day = 1; day <= daysInMonth; day++){
+    const iso = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const isToday = iso === todayISO;
+    const paidToday = billInfo.filter(bi => bi.cur && bi.cur.date === iso);
+    const dueUnpaidToday = billInfo.filter(bi => bi.bill.dueDay === day && !(bi.cur && bi.cur.date === iso));
+
+    const paidHtml = paidToday.map(bi => {
+      const d = bi.delta;
+      let deltaHtml = '';
+      if (d !== null && Math.abs(d) >= 0.01){
+        const up = d > 0;
+        deltaHtml = ` <span style="color:${up?'var(--critical)':'var(--good)'}">${up?'+':'−'}${fmtUSD(Math.abs(d))}</span>`;
+      }
+      const title = `${bi.bill.name}: ${fmtUSD(bi.cur.amount)}${d!==null ? ' (' + (d>=0?'+':'−') + fmtUSD(Math.abs(d)) + ' vs last cycle)' : ''}`;
+      return `<div class="cal-item" style="color:var(--good)" title="${escapeHtml(title)}"><b>${escapeHtml(bi.bill.name)}</b> ${fmtUSD(bi.cur.amount)}${deltaHtml}</div>`;
+    }).join('');
+    const dueHtml = dueUnpaidToday.map(bi =>
+      `<div class="cal-item" style="color:var(--accent)" title="${escapeHtml(bi.bill.name)} due">${escapeHtml(bi.bill.name)} due</div>`
+    ).join('');
+
+    cells.push(`<div class="cal-day${isToday?' today':''}">
+      <div class="cal-daynum">${day}</div>
+      ${paidHtml}${dueHtml}
+    </div>`);
+  }
+  grid.innerHTML = cells.join('');
+}
+
 function categoryRows(d){
   const rows = Object.entries(state.categories).map(([k,v])=>{
     const meta = categoryMeta(k);
@@ -868,19 +1020,31 @@ function categoryRows(d){
   return rows;
 }
 
+function chartFallback(canvasId){
+  const canvas = document.getElementById(canvasId);
+  const wrap = canvas ? canvas.closest('.chart-wrap') : null;
+  if (wrap) wrap.innerHTML = '<p class="text-xs text-[var(--ink-3)] p-3">Chart unavailable right now — your numbers elsewhere on the page are still accurate.</p>';
+}
+
 function renderCatChart(d){
   const rows = categoryRows(d);
   const income = Math.max(d.incomeTotal,1);
   const leakThresholds = {Subscriptions:0.03, Dining:0.06, Misc:0.05, Utilities:0.06};
+  // Chart.js loads from a CDN and can be blocked on some networks — fall back
+  // to the table view (real data, no rendering library needed) instead of
+  // showing a blank canvas or throwing.
+  const chartLibMissing = typeof Chart === 'undefined';
+  const showTable = showCatTable || chartLibMissing;
 
   const table = document.getElementById('catTable');
-  document.getElementById('catChartWrap').classList.toggle('hidden', showCatTable);
-  table.classList.toggle('hidden', !showCatTable);
-  if (showCatTable){
+  document.getElementById('catChartWrap').classList.toggle('hidden', showTable);
+  table.classList.toggle('hidden', !showTable);
+  if (showTable){
     table.innerHTML = `<table class="w-full text-xs"><thead><tr class="text-left text-[var(--ink-3)]">
       <th class="py-1.5 font-semibold">Category</th><th class="py-1.5 font-semibold text-right">Monthly</th><th class="py-1.5 font-semibold text-right">% of income</th></tr></thead>
       <tbody>${rows.map(r=>`<tr class="border-t hairline"><td class="py-1.5">${r.label}</td><td class="py-1.5 text-right tnum">${fmtUSD(r.value)}</td><td class="py-1.5 text-right tnum">${fmtPct(r.value/income)}</td></tr>`).join('')}</tbody></table>`;
   }
+  if (chartLibMissing) return;
 
   if (catChart) catChart.destroy();
   const ctx = document.getElementById('catChart').getContext('2d');
@@ -915,10 +1079,29 @@ function renderCatChart(d){
 }
 
 function renderPayoffChart(d){
+  const s1 = cssVar('--slot-1'), s7 = cssVar('--slot-7');
+  const avalancheActive = state.strategy==='avalanche';
+
+  // Render the text summary first — it needs no charting library and carries
+  // the actual numbers, so it must never be skipped just because the chart
+  // below it fails to draw.
+  const sum = document.getElementById('payoffSummary');
+  const summaryRows = [
+    {label:'Avalanche', p:d.payoffAvalanche, color:s1, active:avalancheActive},
+    {label:'Snowball', p:d.payoffSnowball, color:s7, active:!avalancheActive}
+  ];
+  sum.innerHTML = summaryRows.map(r=>`
+    <div class="card-soft p-3 ${r.active ? '' : 'opacity-70'}">
+      <p class="flex items-center gap-1.5 font-semibold text-xs"><span class="w-2 h-2 rounded-full inline-block" style="background:${r.color}"></span>${r.label}${r.active?' <span class=\"badge badge-good ml-1\">active</span>':''}</p>
+      <p class="mt-1 tnum"><span class="font-display font-bold">${fmtDuration(r.p.months)}</span> to debt-free</p>
+      <p class="text-[var(--ink-3)] tnum">${fmtUSD(r.p.totalInterest)} total interest · done ${fmtMonthYear(addMonths(TODAY,r.p.months))}</p>
+    </div>`).join('');
+
+  if (typeof Chart === 'undefined'){ chartFallback('payoffChart'); return; }
+
   if (payoffChart) payoffChart.destroy();
   const ctx = document.getElementById('payoffChart').getContext('2d');
   const ink2 = cssVar('--ink-2'), grid = cssVar('--grid'), surface = cssVar('--surface'), ink1 = cssVar('--ink-1');
-  const s1 = cssVar('--slot-1'), s7 = cssVar('--slot-7');
   const maxLen = Math.max(d.payoffAvalanche.schedule.length, d.payoffSnowball.schedule.length);
   const labels = Array.from({length:maxLen}, (_,i)=> i===0 ? 'Now' : fmtMonthYear(addMonths(TODAY,i)));
   const pad = (sched)=>{
@@ -926,7 +1109,6 @@ function renderPayoffChart(d){
     while (arr.length < maxLen) arr.push(0);
     return arr;
   };
-  const avalancheActive = state.strategy==='avalanche';
   payoffChart = new Chart(ctx, {
     type:'line',
     data:{
@@ -962,18 +1144,6 @@ function renderPayoffChart(d){
       }
     }
   });
-
-  const sum = document.getElementById('payoffSummary');
-  const rows = [
-    {label:'Avalanche', p:d.payoffAvalanche, color:s1, active:avalancheActive},
-    {label:'Snowball', p:d.payoffSnowball, color:s7, active:!avalancheActive}
-  ];
-  sum.innerHTML = rows.map(r=>`
-    <div class="card-soft p-3 ${r.active ? '' : 'opacity-70'}">
-      <p class="flex items-center gap-1.5 font-semibold text-xs"><span class="w-2 h-2 rounded-full inline-block" style="background:${r.color}"></span>${r.label}${r.active?' <span class=\"badge badge-good ml-1\">active</span>':''}</p>
-      <p class="mt-1 tnum"><span class="font-display font-bold">${fmtDuration(r.p.months)}</span> to debt-free</p>
-      <p class="text-[var(--ink-3)] tnum">${fmtUSD(r.p.totalInterest)} total interest · done ${fmtMonthYear(addMonths(TODAY,r.p.months))}</p>
-    </div>`).join('');
 }
 
 function renderRecommendations(d){
@@ -1052,6 +1222,7 @@ function runParse(announce){
   document.getElementById('parseStatus').textContent = `Parsed ${state.transactions.length} transactions across both accounts.`;
   renderAll(['expenses','surplus','savings','freecash']);
   renderTxnList();
+  renderCalendar();
   if (announce !== false){
     addCoachMessage('coach', `Got it — I re-sorted ${state.transactions.length} transactions into your budget categories and refreshed every number on the dashboard.`);
   }
@@ -1077,11 +1248,26 @@ document.getElementById('addCategoryBtn').addEventListener('click', ()=>{
     status.style.color = '';
     renderAll(['expenses','surplus','savings','freecash']);
     renderTxnList();
+    populateBillCategorySelect();
   } catch (e){
     status.textContent = e.message || 'Could not add that category.';
     status.style.color = 'var(--critical)';
   }
 });
+
+document.getElementById('addBillBtn').addEventListener('click', ()=>{
+  const name = document.getElementById('newBillName').value.trim();
+  const category = document.getElementById('newBillCategory').value || null;
+  const dueDay = parseInt(document.getElementById('newBillDueDay').value, 10);
+  if (!name || !(dueDay>=1 && dueDay<=31)) return;
+  state.bills.push({ id: uid(), name, category, dueDay });
+  document.getElementById('newBillName').value = '';
+  document.getElementById('newBillDueDay').value = '';
+  renderBillList();
+  renderCalendar();
+});
+document.getElementById('calPrev').addEventListener('click', ()=>{ calCursor.setMonth(calCursor.getMonth()-1); renderCalendar(); });
+document.getElementById('calNext').addEventListener('click', ()=>{ calCursor.setMonth(calCursor.getMonth()+1); renderCalendar(); });
 
 function wireCsvImport(fileInputId, dropZoneId, textareaId, nameLabelId){
   const fileInput = document.getElementById(fileInputId);
@@ -1122,11 +1308,8 @@ function wireCsvImport(fileInputId, dropZoneId, textareaId, nameLabelId){
 wireCsvImport('fileYou', 'dropYou', 'pasteYou', 'fileYouName');
 wireCsvImport('fileSpouse', 'dropSpouse', 'pasteSpouse', 'fileSpouseName');
 
-document.getElementById('pasteYou').value = SAMPLE_YOU;
-document.getElementById('pasteSpouse').value = SAMPLE_SPOUSE;
-state.transactions = [...parseBlock(SAMPLE_YOU,'you'), ...parseBlock(SAMPLE_SPOUSE,'spouse')];
 deriveCategoriesFromTransactions();
-document.getElementById('parseStatus').textContent = `Sample data: ${state.transactions.length} transactions parsed. Upload your own CSV above (or edit the pasted text) and re-parse.`;
+document.getElementById('parseStatus').textContent = 'No transactions imported yet — upload a CSV above or paste transactions to get started.';
 
 // ---------- coach NLU ----------
 const CATEGORY_KEYWORDS = [
@@ -1296,6 +1479,37 @@ function buildCoachTools(){
     }
   },
   {
+    name: 'add_bill',
+    description: 'Add a recurring bill (e.g. "Electric", due day 12) so the calendar can match it against imported transactions each month and flag whether it was paid, and how much more or less than the previous cycle. Use when the user mentions a recurring bill and a due date. Idempotent by name (case-insensitive) — calling it again for a bill that already exists just updates its due day/category instead of creating a duplicate.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', minLength: 1, maxLength: 40, description: 'Bill name — should match how it appears in transaction descriptions, e.g. "Electric" to match "AES OHIO ELECTRIC BILL".' },
+        dueDay: { type: 'number', minimum: 1, maximum: 31, description: 'Day of the month it\'s due (1-31).' },
+        category: { type: 'string', description: 'Optional: an existing spending category key to associate with this bill.' }
+      },
+      required: ['name','dueDay']
+    },
+    execute({ name, dueDay, category }){
+      const cleanName = String(name||'').trim();
+      if (!cleanName) throw new Error('Bill name cannot be empty.');
+      const day = Math.round(Number(dueDay));
+      if (!(day>=1 && day<=31)) throw new Error('dueDay must be between 1 and 31.');
+      const cat = category ? String(category) : null;
+      if (cat && !state.categoryDefs.some(c=>c.key===cat)) throw new Error('Unknown category "'+cat+'". Call create_category first if this should be new, or omit category.');
+      const existing = state.bills.find(b=>b.name.toLowerCase()===cleanName.toLowerCase());
+      if (existing){
+        existing.dueDay = day;
+        existing.category = cat;
+      } else {
+        state.bills.push({ id: uid(), name: cleanName, dueDay: day, category: cat });
+      }
+      if (typeof renderBillList === 'function') renderBillList();
+      if (typeof renderCalendar === 'function') renderCalendar();
+      return { name: cleanName, dueDay: day, category: cat, updated: !!existing };
+    }
+  },
+  {
     name: 'list_transactions',
     description: 'List the household\'s individual parsed transactions so you can review and recategorize them. Pass filter "uncertain" (the default) for transactions currently sitting in the catch-all Miscellaneous category — these are the ones most likely to need a better category. Pass "all" to see everything. Results are capped at 40; if truncated, narrow the request (e.g. by asking the user which account or time period to focus on).',
     inputSchema: {
@@ -1438,6 +1652,7 @@ ${debtLines}
 - At the current extra payment, debt-free by ${fmtMonthYear(addMonths(TODAY, d.payoff.months))} (${fmtDuration(d.payoff.months)} from now), paying ${fmtUSD(d.payoff.totalInterest)} total interest.
 - Transaction categories in use: ${categoryKeys().join(', ')}
 - ${uncertainCount} transaction${uncertainCount===1?'':'s'} currently sitting in Miscellaneous (the catch-all bucket) — these are the ones most likely worth reviewing.
+- Recurring bills tracked on the calendar: ${state.bills.length ? state.bills.map(b=>`${b.name} (due day ${b.dueDay})`).join(', ') : 'none yet'}.
 
 HOW TO RESPOND:
 - Keep replies conversational and concise — normally 2-5 short sentences, longer only if asked for a step-by-step breakdown.
@@ -1445,6 +1660,7 @@ HOW TO RESPOND:
 - When the user states or clearly agrees to a concrete change (a new spending level, an extra debt payment amount, a strategy switch), actually CALL the matching tool to apply it — don't just say you will — then explain what changed (new debt-free date, interest saved, etc.).
 - For "what if" or comparison questions, call simulate_scenario or compare_invest_vs_debt for exact figures instead of guessing.
 - If asked to review or clean up transactions, call list_transactions, then recategorize_transaction for the ones you're confident about (a clear merchant match to an existing or sensibly new category). For anything genuinely ambiguous — a cryptic description, a merchant that could fit more than one category, or a purchase type with no good existing category — do NOT guess: describe the transaction(s) in your reply and ask the user which category fits, or whether to create a new one, then act on their answer. Use create_category when no existing category genuinely fits, rather than forcing something into Miscellaneous or a wrong bucket.
+- If the user mentions a recurring bill and when it's due, call add_bill so it shows up on the calendar and gets matched against future transactions automatically.
 - Plain text with occasional **bold** around key numbers; no markdown headers or bullet lists.
 - Stay in scope: this couple's household budget, spending, saving and debt payoff. Gently redirect anything unrelated.`;
 }
@@ -1592,9 +1808,19 @@ if (window.matchMedia){
 }
 
 // ---------- boot ----------
+window.__rerenderAfterChartLoad = () => renderAll();
 renderAll();
 renderTxnList();
-addCoachMessage('coach', `Hi, I'm your live coach. Quick read on your household: ${fmtUSD(dashboard().incomeTotal)}/mo income, ${fmtUSD(dashboard().totalDebt)} in debt, and you're on track to be debt-free by <b>${fmtMonthYear(addMonths(TODAY, dashboard().payoff.months))}</b>. Ask me anything, or try a suggestion below.`);
+populateBillCategorySelect();
+renderBillList();
+renderCalendar();
+{
+  const bootD = dashboard();
+  const greeting = (bootD.incomeTotal === 0 && bootD.totalDebt === 0 && state.transactions.length === 0)
+    ? `Hi, I'm your live coach. This dashboard is empty right now — add your income, import some transactions, and log any debts on the left, and I'll start giving you real numbers instead of guesses. Ask me anything along the way.`
+    : `Hi, I'm your live coach. Quick read on your household: ${fmtUSD(bootD.incomeTotal)}/mo income, ${fmtUSD(bootD.totalDebt)} in debt, and you're on track to be debt-free by <b>${fmtMonthYear(addMonths(TODAY, bootD.payoff.months))}</b>. Ask me anything, or try a suggestion below.`;
+  addCoachMessage('coach', greeting);
+}
 
 })();
 </script>
