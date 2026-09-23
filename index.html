@@ -398,13 +398,16 @@ function categoryMeta(key){
   return def ? { label: def.label, slot: def.slot } : { label: key, slot: null };
 }
 function categoryKeys(){ return state.categoryDefs.map(c => c.key); }
+// Idempotent by design: a duplicate name (case-insensitive) reuses the
+// existing category instead of throwing. A repeated or retried creation
+// attempt — including from the coach, mid-conversation — should never read
+// as "the system is having trouble."
 function addCategory(name){
   const key = String(name || '').trim();
   if (!key) throw new Error('Category name cannot be empty.');
   if (key.length > 40) throw new Error('Category name is too long (max 40 characters).');
-  if (state.categoryDefs.some(c => c.key.toLowerCase() === key.toLowerCase())){
-    throw new Error(`A category named "${key}" already exists.`);
-  }
+  const existing = state.categoryDefs.find(c => c.key.toLowerCase() === key.toLowerCase());
+  if (existing) return existing.key;
   state.categoryDefs.push({ key, label: key, slot: nextAvailableSlot() });
   state.categories[key] = 0;
   return key;
@@ -1066,10 +1069,11 @@ document.getElementById('txnFilterSeg').addEventListener('click', e=>{
 document.getElementById('addCategoryBtn').addEventListener('click', ()=>{
   const input = document.getElementById('newCategoryName');
   const status = document.getElementById('categoryStatus');
+  const alreadyExisted = categoryKeys().some(k => k.toLowerCase() === input.value.trim().toLowerCase());
   try {
     const key = addCategory(input.value);
     input.value = '';
-    status.textContent = `Added "${key}".`;
+    status.textContent = alreadyExisted ? `"${key}" already exists.` : `Added "${key}".`;
     status.style.color = '';
     renderAll(['expenses','surplus','savings','freecash']);
     renderTxnList();
@@ -1241,15 +1245,22 @@ const AI_UNAVAILABLE_CODES = new Set(['not_granted','sampling_disabled','not_dec
 // Built fresh on every call (not a static constant) so each tool's category
 // enum always reflects any categories the coach — or the user — has since added.
 function buildCoachTools(){
+  // NOTE: category fields deliberately take a plain string, not a fixed
+  // `enum`. Tool schemas are built once at the start of a sample() call and
+  // don't change across that call's tool-use rounds — a category created by
+  // create_category mid-conversation wouldn't appear in an enum snapshotted
+  // before it existed, which could make the coach think its own new category
+  // was invalid. execute() re-validates against live state instead, which is
+  // always current even within the same multi-round call.
   const catKeys = categoryKeys();
   return [
   {
     name: 'set_category_spend',
-    description: 'Set one household spending category to a new absolute monthly dollar amount and refresh the dashboard immediately. Use whenever the user states or agrees to a new spending level for a category — compute the resulting absolute amount yourself (e.g. "lowered groceries by $150" means the old amount minus $150). The category must already exist — call create_category first if it doesn\'t.',
+    description: `Set one household spending category to a new absolute monthly dollar amount and refresh the dashboard immediately. Use whenever the user states or agrees to a new spending level for a category — compute the resulting absolute amount yourself (e.g. "lowered groceries by $150" means the old amount minus $150). Category must be one that exists (current ones: ${catKeys.join(', ')}) — call create_category first for a new one, then use that exact name here, even if it's not in this list (this description was written before that call).`,
     inputSchema: {
       type: 'object',
       properties: {
-        category: { type: 'string', enum: catKeys, description: 'Which existing spending category to change.' },
+        category: { type: 'string', description: 'The exact key of an existing spending category — see the current list in the state above, or a name you just created with create_category.' },
         monthlyAmount: { type: 'number', minimum: 0, description: 'The new absolute monthly dollar amount for that category.' }
       },
       required: ['category', 'monthlyAmount']
@@ -1266,17 +1277,22 @@ function buildCoachTools(){
   },
   {
     name: 'create_category',
-    description: 'Create a new household spending category (e.g. "Pet Care", "Childcare") when none of the existing categories genuinely fit — for a whole new budget line, or before recategorizing a transaction into something new. After creating it, use recategorize_transaction or set_category_spend to put money in it.',
+    description: 'Create a new household spending category (e.g. "Pet Care", "Childcare") when none of the existing categories genuinely fit — for a whole new budget line, or before recategorizing a transaction into something new. After creating it, use recategorize_transaction or set_category_spend to put money in it. Safe to call even if you\'re not sure a category already exists by that name — it reuses the existing one instead of failing, so an "already existed" result is not an error.',
     inputSchema: {
       type: 'object',
       properties: { name: { type: 'string', minLength: 1, maxLength: 40, description: 'The new category\'s name, e.g. "Pet Care".' } },
       required: ['name']
     },
     execute({ name }){
+      const alreadyExisted = categoryKeys().some(k => k.toLowerCase() === String(name||'').trim().toLowerCase());
       const key = addCategory(name);
       renderAll(['expenses','surplus','savings','freecash']);
       if (typeof renderTxnList === 'function') renderTxnList();
-      return { category: key, message: `Category "${key}" created.`, existingCategories: categoryKeys() };
+      return {
+        category: key, alreadyExisted,
+        message: alreadyExisted ? `"${key}" already existed — reused it, nothing went wrong.` : `Category "${key}" created.`,
+        existingCategories: categoryKeys()
+      };
     }
   },
   {
@@ -1299,12 +1315,12 @@ function buildCoachTools(){
   },
   {
     name: 'recategorize_transaction',
-    description: 'Move one transaction to a different category and refresh the dashboard. Get transactionId values from list_transactions first. The target category must already exist — call create_category first if it should be a brand-new one. If you are genuinely unsure which category fits a transaction, don\'t guess: describe it to the user and ask, rather than calling this blind.',
+    description: `Move one transaction to a different category and refresh the dashboard. Get transactionId values from list_transactions first. Category must be one that exists (current ones: ${catKeys.join(', ')}) — call create_category first for a brand-new one, then use that exact name here, even if it's not in this list (this description was written before that call). If you are genuinely unsure which category fits a transaction, don't guess: describe it to the user and ask, rather than calling this blind.`,
     inputSchema: {
       type: 'object',
       properties: {
         transactionId: { type: 'string', description: 'A transactionId from list_transactions.' },
-        category: { type: 'string', enum: catKeys, description: 'The existing category to move it to.' }
+        category: { type: 'string', description: 'The exact key of an existing category to move it to — see the current list in the state above, or a name you just created with create_category.' }
       },
       required: ['transactionId','category']
     },
