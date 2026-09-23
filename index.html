@@ -257,6 +257,16 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
         </div>
         <div id="txnList" class="space-y-1 max-h-72 overflow-y-auto scrollbar-thin pr-1"></div>
         <details>
+          <summary class="text-xs font-semibold text-[var(--accent)] cursor-pointer select-none">Bulk recategorize</summary>
+          <p class="text-[.68rem] text-[var(--ink-3)] mt-1">Move every transaction containing this text to a category — clear a whole merchant out of Miscellaneous at once.</p>
+          <div class="grid grid-cols-2 gap-2 mt-2">
+            <input id="bulkMatchText" placeholder="e.g. Kroger" class="input col-span-2 text-xs">
+            <select id="bulkCategory" class="input col-span-2 text-xs"></select>
+            <button id="bulkRecategorizeBtn" class="btn btn-primary text-xs col-span-2 py-2">Apply to all matching</button>
+          </div>
+          <p id="bulkStatus" class="text-[.68rem] text-[var(--ink-3)] mt-1"></p>
+        </details>
+        <details>
           <summary class="text-xs font-semibold text-[var(--accent)] cursor-pointer select-none">+ New category</summary>
           <div class="flex gap-2 mt-2">
             <input id="newCategoryName" placeholder="e.g. Pet Care" class="input text-xs flex-1" maxlength="40">
@@ -398,7 +408,8 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
           </div>
         </div>
         <p class="text-[.7rem] text-[var(--ink-3)] mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full inline-block" style="background:var(--accent)"></span>due, not yet paid</span>
+          <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full inline-block" style="background:var(--accent)"></span>upcoming</span>
+          <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full inline-block" style="background:var(--critical)"></span>late / missed</span>
           <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full inline-block" style="background:var(--good)"></span>paid</span>
           <span>colored amount = vs. last cycle</span>
         </p>
@@ -494,10 +505,12 @@ function addCategory(name){
 // always pure noise — so classify() only ever sees real expenses, and only
 // needs one structural Skip rule left (transfers). Everything else below is
 // an actual spending category.
-function isInternalTransfer(desc){ return /home\s?banking\s?transfer|internal\s?transfer/i.test(desc); }
+function isInternalTransfer(desc){
+  return /home\s?banking\s?transfer|internal\s?transfer|\btransfer\s?(to|from)\b|\bzelle\b|\bp2p\b|account\s?transfer|between\s?accounts|\bxfer\b/i.test(desc);
+}
 
 const CATEGORY_RULES = [
-  [/home\s?banking\s?transfer|internal\s?transfer/i, 'Skip'],
+  [/home\s?banking\s?transfer|internal\s?transfer|\btransfer\s?(to|from)\b|\bzelle\b|\bp2p\b|account\s?transfer|between\s?accounts|\bxfer\b/i, 'Skip'],
   [/rent|mortgage|apartment|property\s?mgmt|landlord/i, 'Home/Mortgage'],
   [/home\s?depot|lowe'?s|menards|ace\s?hardware|hardware\s?store|tractor\s?supply/i, 'Home Improvement'],
   [/amazon|wayfair|\bikea\b|bed\s?bath|homegoods|home\s?goods|pottery\s?barn/i, 'Home Goods'],
@@ -617,7 +630,32 @@ function findColumn(headerNorm, names){
   }
   return -1;
 }
-function detectColumns(headerRow){
+// Some exports carry no sign at all on "Amount" — a purchase and a deposit
+// both show as a plain positive number — and put the sign information in a
+// separate Debit/Credit indicator column instead (header often just "Type").
+// Header-name matching alone is too fragile to find that column reliably, so
+// this also sniffs a sample of each remaining column's actual values against
+// a small debit/credit vocabulary and picks whichever one is consistently
+// one or the other.
+const DEBIT_WORDS = /^(debit|withdrawal|dr|purchase|charge|payment|pos|dbt)$/;
+const CREDIT_WORDS = /^(credit|deposit|cr|refund|payment\s?received|cdt)$/;
+function detectTypeColumnIndex(headerRow, sampleRows, excludeIdx){
+  const norm = headerRow.map(h => h.trim().toLowerCase());
+  const named = norm.findIndex((h, i) => !excludeIdx.has(i) && /\btype\b|dr\s?\/\s?cr|debit\s?\/\s?credit/.test(h));
+  const candidates = named > -1 ? [named] : norm.map((_, i) => i).filter(i => !excludeIdx.has(i));
+  for (const idx of candidates){
+    let matches = 0, total = 0;
+    for (const row of sampleRows){
+      const v = (row[idx] || '').trim().toLowerCase();
+      if (!v) continue;
+      total++;
+      if (DEBIT_WORDS.test(v) || CREDIT_WORDS.test(v)) matches++;
+    }
+    if (total >= 2 && matches / total >= 0.6) return idx;
+  }
+  return -1;
+}
+function detectColumns(headerRow, sampleRows){
   const norm = headerRow.map(h => h.trim().toLowerCase());
   const debit = findColumn(norm, ['debit','withdrawal']);
   const credit = findColumn(norm, ['credit','deposit']);
@@ -626,12 +664,15 @@ function detectColumns(headerRow){
   // claimed by debit/credit — otherwise "Amount Debit"/"Amount Credit"
   // headers (which contain the word "amount") get misread as one signed column.
   const amount = norm.findIndex((h, i) => !claimed.has(i) && /amount|value/.test(h));
-  return {
-    date: findColumn(norm, ['date','transaction date','posted date']),
-    desc: findColumn(norm, ['description','payee','merchant']),
-    memo: findColumn(norm, ['memo','notes']),
-    amount, debit, credit
-  };
+  const date = findColumn(norm, ['date','transaction date','posted date']);
+  const desc = findColumn(norm, ['description','payee','merchant']);
+  const memo = findColumn(norm, ['memo','notes']);
+  // Only worth hunting for a type column when we have an unsigned amount and
+  // no separate debit/credit columns already carrying the sign.
+  const type = (amount > -1 && debit === -1 && credit === -1 && sampleRows)
+    ? detectTypeColumnIndex(headerRow, sampleRows, new Set([date, desc, memo, amount].filter(i => i > -1)))
+    : -1;
+  return { date, desc, memo, amount, debit, credit, type };
 }
 
 // Falls back to "last number in the line is the amount, the rest is the description" —
@@ -666,8 +707,8 @@ function rowsToTransactions(rows, owner){
   const headerIdx = findHeaderRowIndex(rows);
   let dataRows = rows, cols = null;
   if (headerIdx > -1){
-    cols = detectColumns(rows[headerIdx]);
     dataRows = rows.slice(headerIdx + 1);
+    cols = detectColumns(rows[headerIdx], dataRows.slice(0, 15));
   }
   const hasAmountCols = cols && (cols.amount > -1 || cols.debit > -1 || cols.credit > -1);
   const transactions = [], incomeTransactions = [];
@@ -688,9 +729,17 @@ function rowsToTransactions(rows, owner){
     } else if (cols.amount > -1){
       const raw = parseFloat((r[cols.amount]||'').replace(/[\$,()\s]/g,''));
       amount = Number.isNaN(raw) ? 0 : raw;
+      // An unsigned Amount column paired with a Debit/Credit type column is a
+      // common export shape (every value positive, sign lives elsewhere) —
+      // without this, every expense reads as a deposit.
+      if (cols.type > -1){
+        const tv = (r[cols.type] || '').trim().toLowerCase();
+        if (DEBIT_WORDS.test(tv)) amount = -Math.abs(amount);
+        else if (CREDIT_WORDS.test(tv)) amount = Math.abs(amount);
+      }
     }
     if (!amount) continue;
-    const excluded = new Set([cols.date, cols.amount, cols.debit, cols.credit, cols.memo].filter(i => i > -1));
+    const excluded = new Set([cols.date, cols.amount, cols.debit, cols.credit, cols.memo, cols.type].filter(i => i > -1));
     const descCell = cols.desc > -1 ? (r[cols.desc]||'').trim() : '';
     const memoCell = cols.memo > -1 ? (r[cols.memo]||'').trim() : '';
     let desc = [descCell, memoCell].filter(Boolean).join(' — ');
@@ -953,15 +1002,27 @@ function renderTxnList(){
   });
 }
 
+function bulkRecategorize(matchText, category){
+  const kw = String(matchText || '').trim().toLowerCase();
+  if (!kw) return { matchText: kw, category, updatedCount: 0 };
+  let count = 0;
+  state.transactions.forEach(t => {
+    if (t.desc.toLowerCase().includes(kw)){ t.category = category; count++; }
+  });
+  if (count) deriveCategoriesFromTransactions();
+  return { matchText: kw, category, updatedCount: count };
+}
+
 // ---------- income review ----------
-// Suggests a monthly figure per owner from deposits marked (or auto-detected)
-// as recurring: average of that owner's recurring total per calendar month
-// they actually appear in, so one big one-time deposit never skews it.
+// Suggests a monthly figure per owner from deposits a human or the coach has
+// actually CONFIRMED recurring — never the raw looksRecurring guess. Auto-
+// detection can be wrong (an expense with a sign bug, a transfer worded
+// oddly); only counting confirmed rows keeps a bad guess from silently
+// inflating the household's income figure.
 function suggestedIncomeByOwner(){
   const byOwnerMonth = {};
   state.incomeTransactions.forEach(t=>{
-    const recurring = t.reviewed ? t.recurring : t.looksRecurring;
-    if (!recurring || !t.dateISO) return;
+    if (!t.reviewed || !t.recurring || !t.dateISO) return;
     const monthKey = t.dateISO.slice(0,7);
     byOwnerMonth[t.owner] = byOwnerMonth[t.owner] || {};
     byOwnerMonth[t.owner][monthKey] = (byOwnerMonth[t.owner][monthKey] || 0) + t.amount;
@@ -974,6 +1035,21 @@ function suggestedIncomeByOwner(){
   return result;
 }
 
+function removeIncomeTransaction(transactionId){
+  const before = state.incomeTransactions.length;
+  state.incomeTransactions = state.incomeTransactions.filter(t => t.id !== transactionId);
+  return before !== state.incomeTransactions.length;
+}
+function moveIncomeToSpending(transactionId, category){
+  const t = state.incomeTransactions.find(x => x.id === transactionId);
+  if (!t) return null;
+  state.incomeTransactions = state.incomeTransactions.filter(x => x.id !== transactionId);
+  const cat = category || (classify(t.desc) === 'Skip' ? 'Misc' : classify(t.desc));
+  state.transactions.push({ kind:'spend', id: t.id, owner: t.owner, desc: t.desc, amount: t.amount, category: cat, dateISO: t.dateISO });
+  deriveCategoriesFromTransactions();
+  return cat;
+}
+
 function renderIncomeList(){
   const wrap = document.getElementById('incomeList');
   if (!wrap) return;
@@ -984,7 +1060,7 @@ function renderIncomeList(){
   const hasSuggestion = (suggested.you > 0) || (suggested.spouse > 0);
   if (hasSuggestion){
     suggestBox.classList.remove('hidden');
-    suggestBox.innerHTML = `Recurring income detected: <b class="tnum">${fmtUSD(suggested.you||0)}</b> you, <b class="tnum">${fmtUSD(suggested.spouse||0)}</b> spouse (avg/mo).
+    suggestBox.innerHTML = `Confirmed recurring income: <b class="tnum">${fmtUSD(suggested.you||0)}</b> you, <b class="tnum">${fmtUSD(suggested.spouse||0)}</b> spouse (avg/mo).
       <button id="applySuggestedIncomeBtn" class="apply-btn">Apply to income fields</button>`;
     document.getElementById('applySuggestedIncomeBtn').addEventListener('click', ()=>{
       state.income.you = Math.round(suggested.you || state.income.you);
@@ -1002,15 +1078,32 @@ function renderIncomeList(){
     wrap.innerHTML = '<p class="text-xs text-[var(--ink-3)] py-2">No deposits found yet — import transactions above.</p>';
     return;
   }
+  const keys = categoryKeys();
   wrap.innerHTML = state.incomeTransactions.slice().sort((a,b)=>(b.dateISO||'').localeCompare(a.dateISO||'')).map(t=>{
     const recurring = t.reviewed ? t.recurring : t.looksRecurring;
+    // Green means confirmed recurring income — not "any positive number we found".
+    // Unreviewed rows stay a neutral/warning color until a human or the coach checks them.
+    const amountColor = !t.reviewed ? 'var(--warning)' : (recurring ? 'var(--good)' : 'var(--ink-2)');
     return `
-    <div class="flex items-center gap-1.5 text-xs py-1.5 border-t hairline first:border-t-0">
-      <span class="flex-1 min-w-0 truncate" title="${escapeHtml(t.desc)}">${escapeHtml(t.desc)}</span>
-      <span class="tnum shrink-0 w-16 text-right text-[var(--good)]">${fmtUSD(t.amount)}</span>
-      <div class="seg shrink-0" data-income-seg="${t.id}">
-        <div class="seg-btn ${recurring?'active':''}" data-val="recurring" style="padding:.2rem .45rem;font-size:.62rem;">Recurring</div>
-        <div class="seg-btn ${!recurring?'active':''}" data-val="one_time" style="padding:.2rem .45rem;font-size:.62rem;">One-time</div>
+    <div class="border-t hairline first:border-t-0 py-1.5 text-xs">
+      <div class="flex items-center gap-1.5">
+        <span class="flex-1 min-w-0 truncate" title="${escapeHtml(t.desc)}">${escapeHtml(t.desc)}</span>
+        <span class="tnum shrink-0 w-16 text-right" style="color:${amountColor}">${fmtUSD(t.amount)}</span>
+      </div>
+      <div class="flex items-center justify-between gap-1.5 mt-1">
+        <div class="seg shrink-0" data-income-seg="${t.id}">
+          <div class="seg-btn ${t.reviewed && recurring?'active':''}" data-val="recurring" style="padding:.2rem .45rem;font-size:.62rem;">Recurring</div>
+          <div class="seg-btn ${t.reviewed && !recurring?'active':''}" data-val="one_time" style="padding:.2rem .45rem;font-size:.62rem;">One-time</div>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <select class="input text-[.62rem] py-0.5 px-1 w-[92px]" data-move-spend="${t.id}">
+            <option value="">Not income…</option>
+            ${keys.map(k=>`<option value="${escapeHtml(k)}">→ ${escapeHtml(categoryMeta(k).label)}</option>`).join('')}
+          </select>
+          <button class="text-[var(--ink-3)] hover:text-[var(--critical)]" data-remove-income="${t.id}" aria-label="Remove — not income at all">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -1025,6 +1118,21 @@ function renderIncomeList(){
       renderIncomeList();
     });
   });
+  wrap.querySelectorAll('[data-remove-income]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      removeIncomeTransaction(btn.dataset.removeIncome);
+      renderIncomeList();
+    });
+  });
+  wrap.querySelectorAll('[data-move-spend]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      if (!sel.value) return;
+      moveIncomeToSpending(sel.dataset.moveSpend, sel.value);
+      renderAll(['expenses','surplus','savings','freecash']);
+      renderTxnList();
+      renderIncomeList();
+    });
+  });
 }
 
 // ---------- recurring bills & calendar ----------
@@ -1033,6 +1141,13 @@ function populateBillCategorySelect(){
   if (!sel) return;
   const prev = sel.value;
   sel.innerHTML = '<option value="">No category</option>' + categoryKeys().map(k=>`<option value="${escapeHtml(k)}">${escapeHtml(categoryMeta(k).label)}</option>`).join('');
+  if (categoryKeys().includes(prev)) sel.value = prev;
+}
+function populateBulkCategorySelect(){
+  const sel = document.getElementById('bulkCategory');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = categoryKeys().map(k=>`<option value="${escapeHtml(k)}">${escapeHtml(categoryMeta(k).label)}</option>`).join('');
   if (categoryKeys().includes(prev)) sel.value = prev;
 }
 
@@ -1079,6 +1194,27 @@ function billCycleAmount(bill, year, month){
   return { amount: txns.reduce((s,t)=>s+t.amount,0), date: txns.map(t=>t.dateISO).sort().slice(-1)[0] };
 }
 
+// Groups spending by a rough merchant key (first couple of description
+// words) and flags any that show up in 2+ distinct months and aren't
+// already tracked as a bill — the households's real recurring expenses
+// (utilities, groceries run on a schedule, etc.) that nobody's added yet.
+function suggestRecurringBills(){
+  const byMerchant = {};
+  state.transactions.forEach(t => {
+    if (!t.dateISO) return;
+    const key = t.desc.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim().split(/\s+/).slice(0, 2).join(' ');
+    if (!key) return;
+    byMerchant[key] = byMerchant[key] || { months: new Set(), lastDay: null, lastDate: '', sampleDesc: t.desc, category: t.category };
+    byMerchant[key].months.add(t.dateISO.slice(0, 7));
+    if (t.dateISO > byMerchant[key].lastDate){ byMerchant[key].lastDate = t.dateISO; byMerchant[key].lastDay = +t.dateISO.slice(8, 10); byMerchant[key].sampleDesc = t.desc; byMerchant[key].category = t.category; }
+  });
+  const tracked = new Set(state.bills.map(b => b.name.toLowerCase()));
+  return Object.entries(byMerchant)
+    .filter(([key, v]) => v.months.size >= 2 && !tracked.has(key))
+    .map(([key, v]) => ({ suggestedName: key, dueDay: v.lastDay, monthsSeen: v.months.size, sampleDescription: v.sampleDesc, category: v.category }))
+    .sort((a, b) => b.monthsSeen - a.monthsSeen);
+}
+
 let calCursor = new Date(TODAY.getFullYear(), TODAY.getMonth(), 1);
 function renderCalendar(){
   const grid = document.getElementById('calGrid');
@@ -1102,11 +1238,17 @@ function renderCalendar(){
   const cells = ['S','M','T','W','T','F','S'].map(l => `<div class="cal-weekday">${l}</div>`);
   for (let i = 0; i < firstDow; i++) cells.push('<div class="cal-day empty"></div>');
 
+  const todayMidnight = new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate());
+
   for (let day = 1; day <= daysInMonth; day++){
     const iso = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const isToday = iso === todayISO;
+    const isPastDue = new Date(year, month, day) < todayMidnight;
     const paidToday = billInfo.filter(bi => bi.cur && bi.cur.date === iso);
-    const dueUnpaidToday = billInfo.filter(bi => bi.bill.dueDay === day && !(bi.cur && bi.cur.date === iso));
+    // A bill only shows as "due" on its due-day cell if it truly has no
+    // matching payment ANYWHERE this month — paying a few days early or
+    // late shouldn't leave a stale "due" marker sitting on the due day too.
+    const dueUnpaidToday = billInfo.filter(bi => bi.bill.dueDay === day && !bi.cur);
 
     const paidHtml = paidToday.map(bi => {
       const d = bi.delta;
@@ -1118,9 +1260,14 @@ function renderCalendar(){
       const title = `${bi.bill.name}: ${fmtUSD(bi.cur.amount)}${d!==null ? ' (' + (d>=0?'+':'−') + fmtUSD(Math.abs(d)) + ' vs last cycle)' : ''}`;
       return `<div class="cal-item" style="color:var(--good)" title="${escapeHtml(title)}"><b>${escapeHtml(bi.bill.name)}</b> ${fmtUSD(bi.cur.amount)}${deltaHtml}</div>`;
     }).join('');
-    const dueHtml = dueUnpaidToday.map(bi =>
-      `<div class="cal-item" style="color:var(--accent)" title="${escapeHtml(bi.bill.name)} due">${escapeHtml(bi.bill.name)} due</div>`
-    ).join('');
+    // Past its due day with nothing matched this cycle at all -> flag as
+    // late/missed (critical), not just "due" (accent) — the household asked
+    // for a way to see a missing payment, not only an upcoming one.
+    const dueHtml = dueUnpaidToday.map(bi => {
+      const late = isPastDue;
+      const label = late ? 'late — not paid yet' : 'due';
+      return `<div class="cal-item" style="color:${late?'var(--critical)':'var(--accent)'}" title="${escapeHtml(bi.bill.name)} ${label}">${escapeHtml(bi.bill.name)} ${label}</div>`;
+    }).join('');
 
     cells.push(`<div class="cal-day${isToday?' today':''}">
       <div class="cal-daynum">${day}</div>
@@ -1526,9 +1673,10 @@ function autoReviewAfterParse(incomeCount, spendCount){
     return;
   }
   const instruction = `I just imported ${spendCount} spending transaction${spendCount===1?'':'s'} and ${incomeCount} income/deposit transaction${incomeCount===1?'':'s'}. Please review them in this order:
-1) Income first — call list_income_transactions and tell me which deposits look like recurring payroll versus one-time income (a bonus, gift, tax refund, etc). If a clear recurring payroll pattern emerges, call set_income with a monthly estimate for the right person, and mark deposits with classify_income_transaction as you go.
-2) Then spending — call list_transactions with filter "uncertain" and recategorize anything you're confident about; ask me about anything genuinely ambiguous rather than guessing.
-Give me one concise summary covering income first, then spending.`;
+1) Income first — call list_income_transactions and check EACH one carefully. A row landing here only means "a positive amount was found" — it is not verified income. Watch for: (a) an obvious expense that ended up here by a sign-parsing mistake (e.g. a grocery store, gas station, restaurant) — use move_income_to_spending to put it back with the right category; (b) an internal transfer between the household's own accounts (e.g. a spouse moving money between shared accounts) — use remove_income_transaction, it should never count as income or be double-counted; (c) genuine income — mark it recurring payroll or one-time with classify_income_transaction. Only after that, if a clear recurring payroll pattern is confirmed, call set_income with a monthly estimate — never estimate from unreviewed rows, and never include anything you just identified as a transfer or expense.
+2) Then spending — call list_transactions with filter "uncertain" and recategorize anything you're confident about. If several rows share the same merchant, use bulk_recategorize once instead of doing them one at a time. Ask me about anything genuinely ambiguous rather than guessing.
+3) Finally, call suggest_recurring_bills and add_bill for any clear, obviously-recurring candidates (utilities, rent, a subscription that bills monthly) — skip anything that's just a frequently-visited merchant rather than a real bill.
+Give me one concise summary: income first, then spending, then any bills you added.`;
   askCoach(instruction);
 }
 
@@ -1552,10 +1700,28 @@ document.getElementById('addCategoryBtn').addEventListener('click', ()=>{
     renderAll(['expenses','surplus','savings','freecash']);
     renderTxnList();
     populateBillCategorySelect();
+    populateBulkCategorySelect();
   } catch (e){
     status.textContent = e.message || 'Could not add that category.';
     status.style.color = 'var(--critical)';
   }
+});
+
+document.getElementById('bulkRecategorizeBtn').addEventListener('click', ()=>{
+  const status = document.getElementById('bulkStatus');
+  const matchInput = document.getElementById('bulkMatchText');
+  const category = document.getElementById('bulkCategory').value;
+  const result = bulkRecategorize(matchInput.value, category);
+  if (!result.updatedCount){
+    status.textContent = `No transactions matched "${matchInput.value.trim()}".`;
+    status.style.color = 'var(--critical)';
+    return;
+  }
+  status.textContent = `Moved ${result.updatedCount} transaction${result.updatedCount===1?'':'s'} to ${categoryMeta(category).label}.`;
+  status.style.color = '';
+  matchInput.value = '';
+  renderAll(['expenses','surplus','savings','freecash']);
+  renderTxnList();
 });
 
 document.getElementById('addBillBtn').addEventListener('click', ()=>{
@@ -1774,6 +1940,8 @@ function buildCoachTools(){
       const key = addCategory(name);
       renderAll(['expenses','surplus','savings','freecash']);
       if (typeof renderTxnList === 'function') renderTxnList();
+      if (typeof populateBillCategorySelect === 'function') populateBillCategorySelect();
+      if (typeof populateBulkCategorySelect === 'function') populateBulkCategorySelect();
       return {
         category: key, alreadyExisted,
         message: alreadyExisted ? `"${key}" already existed — reused it, nothing went wrong.` : `Category "${key}" created.`,
@@ -1782,8 +1950,17 @@ function buildCoachTools(){
     }
   },
   {
+    name: 'suggest_recurring_bills',
+    description: 'Read-only: scans imported spending for merchants that show up in 2+ different months and aren\'t already tracked as a bill — likely recurring bills nobody has added to the calendar yet (utilities, rent, subscriptions billed monthly, etc). Use this after reviewing spending, then call add_bill for the ones that are genuinely recurring (skip anything that just happens to repeat, like a favorite grocery store visited weekly).',
+    inputSchema: { type: 'object', properties: {} },
+    execute(){
+      const suggestions = suggestRecurringBills().slice(0, 15);
+      return { count: suggestions.length, suggestions };
+    }
+  },
+  {
     name: 'add_bill',
-    description: 'Add a recurring bill (e.g. "Electric", due day 12) so the calendar can match it against imported transactions each month and flag whether it was paid, and how much more or less than the previous cycle. Use when the user mentions a recurring bill and a due date. Idempotent by name (case-insensitive) — calling it again for a bill that already exists just updates its due day/category instead of creating a duplicate.',
+    description: 'Add a recurring bill (e.g. "Electric", due day 12) so the calendar can match it against imported transactions each month and flag whether it was paid, and how much more or less than the previous cycle. Use when the user mentions a recurring bill and a due date, or after suggest_recurring_bills surfaces a clear candidate. Idempotent by name (case-insensitive) — calling it again for a bill that already exists just updates its due day/category instead of creating a duplicate.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1852,8 +2029,44 @@ function buildCoachTools(){
     }
   },
   {
+    name: 'remove_income_transaction',
+    description: 'Permanently remove one row from income review — for something that was never income at all: an internal transfer between the household\'s own accounts, or an expense that ended up here by mistake (a parsing sign error). It will not be counted anywhere. If it\'s actually a real expense rather than pure noise, use move_income_to_spending instead so the dollar amount is preserved in the right category.',
+    inputSchema: {
+      type: 'object',
+      properties: { transactionId: { type: 'string', description: 'A transactionId from list_income_transactions.' } },
+      required: ['transactionId']
+    },
+    execute({ transactionId }){
+      const removed = removeIncomeTransaction(String(transactionId));
+      if (!removed) throw new Error('No income transaction with id "'+transactionId+'". Call list_income_transactions first.');
+      if (typeof renderIncomeList === 'function') renderIncomeList();
+      return { transactionId, removed: true };
+    }
+  },
+  {
+    name: 'move_income_to_spending',
+    description: 'Reclassify a row from income review as a real expense instead — for a transaction that\'s sitting in income by mistake (e.g. a sign-detection error made a purchase look like a deposit) but is genuinely spending, not noise. Moves it into the spending list under the given category (or an auto-guessed one if omitted) and removes it from income. If it\'s actually pure noise (a transfer), use remove_income_transaction instead.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        transactionId: { type: 'string', description: 'A transactionId from list_income_transactions.' },
+        category: { type: 'string', description: 'An existing spending category key. Omit to let it auto-classify from the description.' }
+      },
+      required: ['transactionId']
+    },
+    execute({ transactionId, category }){
+      if (category && !state.categoryDefs.some(c => c.key === String(category))) throw new Error('Unknown category "'+category+'". Call create_category first, or omit category to auto-classify.');
+      const newCategory = moveIncomeToSpending(String(transactionId), category ? String(category) : null);
+      if (newCategory === null) throw new Error('No income transaction with id "'+transactionId+'". Call list_income_transactions first.');
+      renderAll(['expenses','surplus','savings','freecash']);
+      if (typeof renderTxnList === 'function') renderTxnList();
+      if (typeof renderIncomeList === 'function') renderIncomeList();
+      return { transactionId, newCategory };
+    }
+  },
+  {
     name: 'set_income',
-    description: 'Set one person\'s monthly income and refresh the dashboard. Use once you\'ve identified a clear recurring payroll pattern in list_income_transactions (e.g. two $2,400 deposits a month averages to $4,800/mo) — confirm the figure with the user in your reply rather than silently overwriting an existing value they may have set deliberately.',
+    description: 'Set one person\'s monthly income and refresh the dashboard. Only call this after confirming a recurring payroll pattern with classify_income_transaction (kind: "recurring") on the relevant deposits — never from an unreviewed looksRecurring guess, which can include misclassified expenses or transfers. Confirm the figure with the user in your reply rather than silently overwriting an existing value they may have set deliberately.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1913,6 +2126,27 @@ function buildCoachTools(){
       renderAll(['expenses','surplus','savings','freecash']);
       if (typeof renderTxnList === 'function') renderTxnList();
       return { transactionId, description: t.desc, previousCategory, newCategory: category };
+    }
+  },
+  {
+    name: 'bulk_recategorize',
+    description: 'Move every transaction whose description contains a given text (case-insensitive, e.g. "kroger") to a category, in one call — the fast way to clear a merchant out of Miscellaneous once instead of one row at a time. Category must already exist; call create_category first for a new one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        matchText: { type: 'string', minLength: 1, description: 'Text to match against transaction descriptions, case-insensitive (e.g. a merchant name).' },
+        category: { type: 'string', description: 'The exact key of an existing category to move all matches to.' }
+      },
+      required: ['matchText','category']
+    },
+    execute({ matchText, category }){
+      category = String(category);
+      if (!state.categoryDefs.some(c => c.key === category)) throw new Error('Unknown category "'+category+'". Call create_category first if this should be new. Valid: '+categoryKeys().join(', '));
+      const result = bulkRecategorize(matchText, category);
+      if (result.updatedCount === 0) throw new Error('No transactions matched "'+matchText+'".');
+      renderAll(['expenses','surplus','savings','freecash']);
+      if (typeof renderTxnList === 'function') renderTxnList();
+      return result;
     }
   },
   {
@@ -2025,8 +2259,9 @@ HOW TO RESPOND:
 - Ground every number in the state above or in a tool result — never estimate math a tool could compute exactly.
 - When the user states or clearly agrees to a concrete change (a new spending level, an extra debt payment amount, a strategy switch), actually CALL the matching tool to apply it — don't just say you will — then explain what changed (new debt-free date, interest saved, etc.).
 - For "what if" or comparison questions, call simulate_scenario or compare_invest_vs_debt for exact figures instead of guessing.
-- If asked to review or clean up transactions, call list_transactions, then recategorize_transaction for the ones you're confident about (a clear merchant match to an existing or sensibly new category). For anything genuinely ambiguous — a cryptic description, a merchant that could fit more than one category, or a purchase type with no good existing category — do NOT guess: describe the transaction(s) in your reply and ask the user which category fits, or whether to create a new one, then act on their answer. Use create_category when no existing category genuinely fits, rather than forcing something into Miscellaneous or a wrong bucket.
-- If the user mentions a recurring bill and when it's due, call add_bill so it shows up on the calendar and gets matched against future transactions automatically.
+- If asked to review or clean up transactions, call list_transactions, then recategorize_transaction for the ones you're confident about (a clear merchant match to an existing or sensibly new category); if several rows share a merchant, use bulk_recategorize once rather than one at a time. For anything genuinely ambiguous — a cryptic description, a merchant that could fit more than one category, or a purchase type with no good existing category — do NOT guess: describe the transaction(s) in your reply and ask the user which category fits, or whether to create a new one, then act on their answer. Use create_category when no existing category genuinely fits, rather than forcing something into Miscellaneous or a wrong bucket.
+- Income review is not trustworthy by default — a row in list_income_transactions only means "a positive amount was found," never confirmed income. Before treating anything as income: check it isn't really an expense that got mis-signed during import (move_income_to_spending) or an internal transfer between the household's own accounts, including transfers from a named family member's account (remove_income_transaction — it should never count as income). Only call set_income off deposits you've actually confirmed recurring with classify_income_transaction.
+- If the user mentions a recurring bill and when it's due, call add_bill so it shows up on the calendar and gets matched against future transactions automatically. If asked to review bills or find missing ones, call suggest_recurring_bills first.
 - Plain text with occasional **bold** around key numbers; no markdown headers or bullet lists.
 - Stay in scope: this couple's household budget, spending, saving and debt payoff. Gently redirect anything unrelated.`;
 }
@@ -2179,6 +2414,7 @@ renderAll();
 renderTxnList();
 renderIncomeList();
 populateBillCategorySelect();
+populateBulkCategorySelect();
 renderBillList();
 renderCalendar();
 {
