@@ -1,0 +1,991 @@
+<title>Debt-Free Runway</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@700;800&display=swap">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+:root{
+  color-scheme: light;
+  --surface:#fcfcfb; --surface-2:#f3f2ee; --surface-3:#eceae3; --page:#f9f9f7;
+  --ink-1:#0b0b0b; --ink-2:#52514e; --ink-3:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,0.10); --border-strong:rgba(11,11,11,0.16);
+  --accent:#2a78d6; --accent-ink:#ffffff; --accent-soft:rgba(42,120,214,0.10); --accent-soft-strong:rgba(42,120,214,0.20);
+  --good:#0ca30c; --good-soft:rgba(12,163,12,0.12);
+  --warning:#c98500; --warning-soft:rgba(250,178,25,0.20);
+  --critical:#d03b3b; --critical-soft:rgba(208,59,59,0.10);
+  --slot-1:#2a78d6; --slot-2:#eb6834; --slot-3:#1baf7a; --slot-4:#eda100;
+  --slot-5:#e87ba4; --slot-6:#008300; --slot-7:#4a3aa7; --slot-8:#e34948;
+  --success-text:#006300;
+  --header-h:64px;
+  --font-display:'Manrope',system-ui,-apple-system,sans-serif;
+  --font-body:'Inter',system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --surface:#1a1a19; --surface-2:#222220; --surface-3:#282825; --page:#0d0d0d;
+    --ink-1:#ffffff; --ink-2:#c3c2b7; --ink-3:#898781;
+    --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,0.10); --border-strong:rgba(255,255,255,0.18);
+    --accent:#3987e5; --accent-ink:#ffffff; --accent-soft:rgba(57,135,229,0.16); --accent-soft-strong:rgba(57,135,229,0.30);
+    --good:#0ca30c; --good-soft:rgba(12,163,12,0.18);
+    --warning:#eda100; --warning-soft:rgba(250,178,25,0.20);
+    --critical:#e66767; --critical-soft:rgba(230,103,103,0.16);
+    --slot-1:#3987e5; --slot-2:#d95926; --slot-3:#199e70; --slot-4:#c98500;
+    --slot-5:#d55181; --slot-6:#008300; --slot-7:#9085e9; --slot-8:#e66767;
+    --success-text:#0ca30c;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --surface:#1a1a19; --surface-2:#222220; --surface-3:#282825; --page:#0d0d0d;
+  --ink-1:#ffffff; --ink-2:#c3c2b7; --ink-3:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,0.10); --border-strong:rgba(255,255,255,0.18);
+  --accent:#3987e5; --accent-ink:#ffffff; --accent-soft:rgba(57,135,229,0.16); --accent-soft-strong:rgba(57,135,229,0.30);
+  --good:#0ca30c; --good-soft:rgba(12,163,12,0.18);
+  --warning:#eda100; --warning-soft:rgba(250,178,25,0.20);
+  --critical:#e66767; --critical-soft:rgba(230,103,103,0.16);
+  --slot-1:#3987e5; --slot-2:#d95926; --slot-3:#199e70; --slot-4:#c98500;
+  --slot-5:#d55181; --slot-6:#008300; --slot-7:#9085e9; --slot-8:#e66767;
+  --success-text:#0ca30c;
+}
+
+*{box-sizing:border-box;}
+body{background:var(--page);color:var(--ink-1);font-family:var(--font-body);-webkit-font-smoothing:antialiased;}
+h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
+.tnum{font-variant-numeric:tabular-nums;}
+::selection{background:var(--accent-soft-strong);}
+.scrollbar-thin::-webkit-scrollbar{width:8px;height:8px;}
+.scrollbar-thin::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:8px;}
+.scrollbar-thin::-webkit-scrollbar-track{background:transparent;}
+
+.app-header{background:var(--surface);border-bottom:1px solid var(--border);}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:16px;}
+.card-soft{background:var(--surface-2);border:1px solid var(--border);border-radius:14px;}
+.hairline{border-color:var(--border);}
+
+.btn{font-family:var(--font-body);font-weight:600;border-radius:10px;transition:filter .15s ease, transform .1s ease;cursor:pointer;}
+.btn:active{transform:translateY(1px);}
+.btn-primary{background:var(--accent);color:var(--accent-ink);}
+.btn-primary:hover{filter:brightness(1.08);}
+.btn-ghost{background:transparent;color:var(--ink-2);border:1px solid var(--border-strong);}
+.btn-ghost:hover{background:var(--surface-2);color:var(--ink-1);}
+.btn-danger-ghost{background:transparent;color:var(--critical);border:1px solid var(--border);}
+.btn-danger-ghost:hover{background:var(--critical-soft);}
+
+.field-label{font-size:.72rem;font-weight:600;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;}
+.input, .textarea, select.input{
+  width:100%;background:var(--surface);border:1px solid var(--border-strong);border-radius:10px;
+  color:var(--ink-1);font-family:var(--font-body);font-size:.875rem;padding:.5rem .65rem;
+}
+.input:focus, .textarea:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent);}
+.textarea{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.72rem;line-height:1.5;resize:vertical;}
+
+.seg{display:inline-flex;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:3px;gap:3px;}
+.seg-btn{font-size:.8rem;font-weight:600;color:var(--ink-2);padding:.4rem .75rem;border-radius:8px;cursor:pointer;white-space:nowrap;}
+.seg-btn.active{background:var(--accent);color:var(--accent-ink);}
+
+.badge{display:inline-flex;align-items:center;gap:.35rem;font-size:.72rem;font-weight:600;padding:.2rem .55rem;border-radius:999px;white-space:nowrap;}
+.badge-good{background:var(--good-soft);color:var(--success-text);}
+.badge-warning{background:var(--warning-soft);color:var(--warning);}
+.badge-critical{background:var(--critical-soft);color:var(--critical);}
+.badge-neutral{background:var(--surface-3);color:var(--ink-2);}
+
+.stat-tile{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px 16px;transition:background-color .6s ease, border-color .6s ease;}
+.stat-tile.flash{background:var(--accent-soft);border-color:var(--accent);}
+.stat-value{font-family:var(--font-display);font-weight:800;font-size:1.5rem;letter-spacing:-.01em;}
+
+.meter-track{height:8px;border-radius:999px;background:var(--grid);overflow:hidden;}
+.meter-fill{height:100%;border-radius:999px;}
+
+.chat-shell{background:var(--surface);border:1px solid var(--border);border-radius:18px;}
+.chat-scroll{overflow-y:auto;}
+.bubble{max-width:88%;padding:.65rem .85rem;font-size:.85rem;line-height:1.5;border-radius:16px;}
+.bubble-user{background:var(--accent);color:var(--accent-ink);border-bottom-right-radius:4px;margin-left:auto;}
+.bubble-coach{background:var(--surface-2);color:var(--ink-1);border:1px solid var(--border);border-bottom-left-radius:4px;}
+.bubble-coach b{color:var(--ink-1);}
+.chip{font-size:.75rem;font-weight:600;color:var(--accent);background:var(--accent-soft);border:1px solid transparent;border-radius:999px;padding:.35rem .7rem;cursor:pointer;text-align:left;}
+.chip:hover{background:var(--accent-soft-strong);}
+.apply-btn{font-size:.75rem;font-weight:700;background:var(--good);color:#fff;border-radius:8px;padding:.3rem .6rem;cursor:pointer;display:inline-flex;align-items:center;gap:.3rem;margin-top:.4rem;}
+.apply-btn:hover{filter:brightness(1.08);}
+.coach-dot{width:8px;height:8px;border-radius:999px;background:var(--good);box-shadow:0 0 0 3px var(--good-soft);}
+
+.rec-row{border:1px solid var(--border);border-radius:12px;padding:.65rem .8rem;background:var(--surface);}
+.rec-row.done{opacity:.55;}
+.rec-row.done .rec-title{text-decoration:line-through;}
+
+
+.chart-wrap{position:relative;width:100%;}
+
+.drawer{position:fixed;inset:0 0 0 auto;width:100%;max-width:420px;transform:translateX(100%);transition:transform .25s ease;z-index:50;}
+.drawer.open{transform:translateX(0);}
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:opacity .25s ease;z-index:40;}
+.scrim.open{opacity:1;pointer-events:auto;}
+.fab{position:fixed;right:18px;bottom:calc(18px + env(safe-area-inset-bottom,0px));z-index:45;box-shadow:0 8px 24px rgba(0,0,0,.25);}
+
+@media (min-width: 1024px){
+  .side-sticky{position:sticky;top:calc(var(--header-h) + 16px);height:calc(100vh - var(--header-h) - 32px);}
+}
+</style>
+
+<div class="min-h-screen flex flex-col">
+  <header class="app-header sticky top-0 z-30" style="height:var(--header-h)">
+    <div class="h-full max-w-[1600px] mx-auto px-4 lg:px-6 flex items-center justify-between gap-4">
+      <div class="flex items-center gap-2.5">
+        <svg width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+          <rect x="1" y="1" width="24" height="24" rx="7" fill="var(--accent)"/>
+          <path d="M6.5 17.5L10.5 12.5L13.5 15L19.5 8" stroke="var(--accent-ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div>
+          <h1 class="font-display font-extrabold text-[1.05rem] leading-none">Debt-Free Runway</h1>
+          <p class="text-[.68rem] text-[var(--ink-3)] leading-none mt-1 hidden sm:block">Household finance &amp; live coaching</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 sm:gap-3">
+        <span id="hdrStatusBadge" class="badge badge-good"></span>
+        <span id="hdrFreeDate" class="hidden md:inline-flex badge badge-neutral tnum"></span>
+        <button id="openCoachMobile" class="lg:hidden btn btn-primary text-xs px-3 py-2">Coach</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="max-w-[1600px] w-full mx-auto px-4 lg:px-6 py-5 grid grid-cols-1 lg:grid-cols-[320px_1fr_380px] gap-5 flex-1 w-full">
+
+    <!-- HOUSEHOLD HUB -->
+    <aside class="side-sticky overflow-y-auto scrollbar-thin pr-1 space-y-4">
+      <section class="card p-4 space-y-3">
+        <h2 class="font-display font-bold text-sm">Monthly income</h2>
+        <div class="grid grid-cols-2 gap-3">
+          <label class="block">
+            <span class="field-label">You</span>
+            <div class="flex items-center gap-1 mt-1">
+              <span class="text-[var(--ink-3)] text-sm">$</span>
+              <input id="incomeYou" type="number" min="0" step="50" class="input tnum" value="4800">
+            </div>
+          </label>
+          <label class="block">
+            <span class="field-label">Spouse</span>
+            <div class="flex items-center gap-1 mt-1">
+              <span class="text-[var(--ink-3)] text-sm">$</span>
+              <input id="incomeSpouse" type="number" min="0" step="50" class="input tnum" value="3100">
+            </div>
+          </label>
+        </div>
+        <p class="text-xs text-[var(--ink-3)]">Combined take-home: <span id="incomeTotalLabel" class="tnum font-semibold text-[var(--ink-1)]"></span>/mo</p>
+      </section>
+
+      <section class="card p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="font-display font-bold text-sm">Import transactions</h2>
+          <span class="text-[.65rem] text-[var(--ink-3)]">sample data loaded</span>
+        </div>
+        <p class="text-xs text-[var(--ink-2)]">Paste a CSV or bank export line-per-transaction. We auto-sort each one into Housing, Groceries, Utilities, Subscriptions, Dining or Misc.</p>
+        <div>
+          <span class="field-label">Your account</span>
+          <textarea id="pasteYou" class="textarea mt-1" rows="6"></textarea>
+        </div>
+        <div>
+          <span class="field-label">Spouse's account</span>
+          <textarea id="pasteSpouse" class="textarea mt-1" rows="6"></textarea>
+        </div>
+        <button id="parseBtn" class="btn btn-primary text-xs w-full py-2">Parse &amp; recalculate</button>
+        <p id="parseStatus" class="text-[.7rem] text-[var(--ink-3)]"></p>
+      </section>
+
+      <section class="card p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="font-display font-bold text-sm">Debts</h2>
+          <span id="debtCountLabel" class="text-[.65rem] text-[var(--ink-3)]"></span>
+        </div>
+        <div id="debtList" class="space-y-2"></div>
+        <details class="pt-1">
+          <summary class="text-xs font-semibold text-[var(--accent)] cursor-pointer select-none">+ Add a debt</summary>
+          <div class="grid grid-cols-2 gap-2 mt-2">
+            <input id="newDebtName" placeholder="Name" class="input col-span-2 text-xs">
+            <input id="newDebtBalance" type="number" placeholder="Balance $" class="input text-xs tnum">
+            <input id="newDebtApr" type="number" step="0.1" placeholder="APR %" class="input text-xs tnum">
+            <input id="newDebtMin" type="number" placeholder="Min payment $" class="input col-span-2 text-xs tnum">
+            <button id="addDebtBtn" class="btn btn-primary text-xs col-span-2 py-2">Add debt</button>
+          </div>
+        </details>
+      </section>
+
+      <section class="card p-4 space-y-3">
+        <h2 class="font-display font-bold text-sm">Payoff strategy</h2>
+        <div class="seg w-full" id="strategySeg">
+          <div class="seg-btn flex-1 text-center" data-strategy="avalanche">Avalanche</div>
+          <div class="seg-btn flex-1 text-center" data-strategy="snowball">Snowball</div>
+        </div>
+        <p class="text-[.72rem] text-[var(--ink-3)]" id="strategyHint"></p>
+        <label class="block">
+          <span class="field-label">Extra toward debt / mo</span>
+          <div class="flex items-center gap-1 mt-1">
+            <span class="text-[var(--ink-3)] text-sm">$</span>
+            <input id="extraPayment" type="number" min="0" step="25" class="input tnum" value="500">
+          </div>
+        </label>
+      </section>
+    </aside>
+
+    <!-- MAIN DASHBOARD -->
+    <main class="space-y-5 min-w-0">
+      <section class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div class="stat-tile" data-tile="income"><p class="field-label">Monthly income</p><p class="stat-value tnum mt-1" id="tileIncome">$0</p></div>
+        <div class="stat-tile" data-tile="expenses"><p class="field-label">Total obligated</p><p class="stat-value tnum mt-1" id="tileExpenses">$0</p></div>
+        <div class="stat-tile" data-tile="surplus"><p class="field-label">Cash flow surplus</p><p class="stat-value tnum mt-1" id="tileSurplus">$0</p></div>
+        <div class="stat-tile" data-tile="savings"><p class="field-label">Savings rate</p><p class="stat-value tnum mt-1" id="tileSavings">0%</p></div>
+        <div class="stat-tile" data-tile="debt"><p class="field-label">Total debt</p><p class="stat-value tnum mt-1" id="tileDebt">$0</p></div>
+        <div class="stat-tile" data-tile="interest"><p class="field-label">Projected interest</p><p class="stat-value tnum mt-1" id="tileInterest">$0</p></div>
+        <div class="stat-tile" data-tile="freedate"><p class="field-label">Debt-free date</p><p class="stat-value tnum mt-1" id="tileFreeDate">—</p></div>
+        <div class="stat-tile" data-tile="freecash"><p class="field-label">Free cash / mo</p><p class="stat-value tnum mt-1" id="tileFreeCash">$0</p></div>
+      </section>
+
+      <section class="card p-4">
+        <h3 class="field-label mb-2">Income allocation</h3>
+        <div class="meter-track flex">
+          <div class="meter-fill" id="meterObligated" style="background:var(--ink-3)"></div>
+          <div class="meter-fill" id="meterExtra" style="background:var(--good)"></div>
+          <div class="meter-fill" id="meterFree" style="background:var(--accent)"></div>
+        </div>
+        <div class="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-[.72rem] text-[var(--ink-2)]">
+          <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full inline-block" style="background:var(--ink-3)"></span>Bills &amp; minimums <b id="legObligated" class="tnum text-[var(--ink-1)]"></b></span>
+          <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full inline-block" style="background:var(--good)"></span>Extra to debt <b id="legExtra" class="tnum text-[var(--ink-1)]"></b></span>
+          <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full inline-block" style="background:var(--accent)"></span>Free cash <b id="legFree" class="tnum text-[var(--ink-1)]"></b></span>
+        </div>
+      </section>
+
+      <section class="card p-4">
+        <div class="flex items-center justify-between mb-1">
+          <h3 class="font-display font-bold text-sm">Where the money goes</h3>
+          <button id="toggleCatTable" class="text-[.7rem] font-semibold text-[var(--accent)]">View as table</button>
+        </div>
+        <p class="text-[.72rem] text-[var(--ink-3)] mb-2">Ranked by monthly spend · <span class="font-bold" style="color:var(--warning)">*</span> flagged as a likely money leak</p>
+        <div class="chart-wrap" id="catChartWrap" style="height:280px"><canvas id="catChart"></canvas></div>
+        <div id="catTable" class="hidden"></div>
+      </section>
+
+      <section class="card p-4">
+        <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+          <h3 class="font-display font-bold text-sm">Debt-free timeline</h3>
+          <div class="flex gap-3 text-[.72rem]">
+            <span class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 inline-block" style="background:var(--slot-1)"></span>Avalanche</span>
+            <span class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 inline-block" style="background:var(--slot-7)"></span>Snowball</span>
+          </div>
+        </div>
+        <div class="chart-wrap" style="height:260px"><canvas id="payoffChart"></canvas></div>
+        <div id="payoffSummary" class="grid grid-cols-2 gap-3 mt-3 text-xs"></div>
+      </section>
+
+      <section class="card p-4">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="font-display font-bold text-sm">Recommended moves</h3>
+          <span class="text-[.68rem] text-[var(--ink-3)]">ranked by monthly impact</span>
+        </div>
+        <div id="recList" class="space-y-2"></div>
+      </section>
+    </main>
+
+    <!-- COACH (desktop column) -->
+    <aside class="hidden lg:block side-sticky" id="coachDesktopWrap"></aside>
+  </div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<div class="drawer lg:hidden" id="coachDrawer"></div>
+
+<template id="coachTemplate">
+  <div class="chat-shell h-full flex flex-col overflow-hidden">
+    <div class="flex items-center justify-between px-4 py-3 border-b hairline">
+      <div class="flex items-center gap-2">
+        <span class="coach-dot"></span>
+        <div>
+          <p class="font-display font-bold text-sm leading-none">Live Financial Coach</p>
+          <p class="text-[.68rem] text-[var(--ink-3)] mt-0.5">Reads your dashboard in real time</p>
+        </div>
+      </div>
+      <button class="coach-close lg:hidden btn-ghost btn text-xs px-2 py-1">Close</button>
+    </div>
+    <div class="chat-scroll scrollbar-thin flex-1 px-4 py-3 space-y-3" data-role="messages"></div>
+    <div class="px-3 pt-2 flex gap-2 overflow-x-auto scrollbar-thin" data-role="chips"></div>
+    <form class="px-3 py-3 flex gap-2 border-t hairline" data-role="form">
+      <input data-role="input" class="input flex-1" placeholder="Ask your coach anything…" autocomplete="off">
+      <button type="submit" class="btn btn-primary px-3 py-2 flex items-center justify-center" aria-label="Send">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 12L20 4L14 20L11 13L4 12Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </button>
+    </form>
+  </div>
+</template>
+
+<script>
+(function(){
+"use strict";
+
+const TODAY = new Date(2026, 8, 23);
+const fmtUSD = (n, opts) => new Intl.NumberFormat('en-US', Object.assign({style:'currency', currency:'USD', maximumFractionDigits:0}, opts||{})).format(n||0);
+const fmtPct = (n) => (n*100).toFixed(0) + '%';
+const clamp0 = (n) => Math.max(0, n);
+const uid = (()=>{let n=1000; return ()=> 'd'+(n++);})();
+
+const CATEGORY_META = {
+  Housing:      {label:'Housing',       slot:'--slot-1'},
+  Utilities:    {label:'Utilities',     slot:'--slot-2'},
+  Groceries:    {label:'Groceries',     slot:'--slot-3'},
+  Dining:       {label:'Dining',        slot:'--slot-4'},
+  Subscriptions:{label:'Subscriptions', slot:'--slot-5'},
+  Misc:         {label:'Miscellaneous', slot:'--slot-7'},
+  'Debt Service':{label:'Debt Service (min)', slot:'--slot-8'}
+};
+
+const CATEGORY_RULES = [
+  [/rent|mortgage|apartment|property\s?mgmt|landlord/i, 'Housing'],
+  [/electric|power\s?co|water\s?dept|water\s?utility|\binternet\b|xfinity|comcast|spectrum|at&t|verizon|natural\s?gas|utility|utilities/i, 'Utilities'],
+  [/kroger|whole\s?foods|trader\s?joe|safeway|aldi|walmart\s?(supercenter)?|publix|grocery|market\s?basket|harris\s?teeter/i, 'Groceries'],
+  [/netflix|spotify|hulu|disney\+|hbo|apple\.com\/bill|youtube\s?premium|gym|planet\s?fitness|prime\s?video|audible|subscription|icloud/i, 'Subscriptions'],
+  [/doordash|uber\s?eats|grubhub|starbucks|chipotle|restaurant|cafe|pizza|taco|bar\s?tab|takeout/i, 'Dining'],
+  [/autopay|card\s?payment|loan\s?pymt|loan\s?payment|thank\s?you.*payment|payment.*thank\s?you|capital\s?one\s?pymt|discover\s?pymt/i, 'Skip'],
+  [/payroll|direct\s?dep|deposit|refund|interest\s?earned|transfer\s?in/i, 'Skip']
+];
+
+const state = {
+  income: { you: 4800, spouse: 3100 },
+  transactions: [],
+  categories: {},
+  debts: [
+    {id: uid(), name:'Sundance Visa', balance:4200, apr:24.99, minPayment:120},
+    {id: uid(), name:'Target RedCard', balance:1150, apr:26.99, minPayment:45},
+    {id: uid(), name:'Auto Loan', balance:9800, apr:6.4, minPayment:310},
+    {id: uid(), name:'Student Loan', balance:15600, apr:5.2, minPayment:180}
+  ],
+  strategy: 'avalanche',
+  extraPayment: 500,
+  investReturnRate: 0.07,
+  pendingProposal: null
+};
+
+const SAMPLE_YOU = [
+  "09/02/2026, Northgate Apartments LLC, -1450.00",
+  "09/03/2026, Whole Foods Mkt, -96.40",
+  "09/04/2026, City Water & Power, -142.10",
+  "09/05/2026, Netflix.com, -17.99",
+  "09/06/2026, Starbucks, -8.45",
+  "09/07/2026, Chipotle Mexican Grill, -14.20",
+  "09/08/2026, Payroll Direct Deposit, 2400.00",
+  "09/10/2026, Kroger, -110.75",
+  "09/11/2026, DoorDash, -38.60",
+  "09/12/2026, Xfinity Internet, -89.99",
+  "09/14/2026, Spotify Premium, -11.99",
+  "09/15/2026, Target, -64.30",
+  "09/16/2026, Sundance Visa Payment Thank You, -120.00",
+  "09/18/2026, Planet Fitness, -24.99",
+  "09/20/2026, Amazon.com, -52.10",
+  "09/22/2026, Payroll Direct Deposit, 2400.00"
+].join("\n");
+
+const SAMPLE_SPOUSE = [
+  "09/02/2026, Trader Joe's, -74.20",
+  "09/03/2026, City Water & Power (2nd unit), -58.00",
+  "09/04/2026, Uber Eats, -29.80",
+  "09/06/2026, AT&T Wireless, -95.00",
+  "09/07/2026, Payroll Direct Deposit, 1550.00",
+  "09/09/2026, Auto Loan Autopay, -310.00",
+  "09/11/2026, Safeway, -88.15",
+  "09/12/2026, Disney+, -13.99",
+  "09/14/2026, Chipotle, -19.40",
+  "09/16/2026, Student Loan Payment Thank You, -180.00",
+  "09/18/2026, Target RedCard Pymt, -45.00",
+  "09/20/2026, iCloud Storage, -2.99",
+  "09/21/2026, Payroll Direct Deposit, 1550.00"
+].join("\n");
+
+// ---------- parsing ----------
+function classify(desc){
+  for (const [re, cat] of CATEGORY_RULES){ if (re.test(desc)) return cat; }
+  return 'Misc';
+}
+function parseLine(line, owner){
+  const raw = line.trim();
+  if (!raw) return null;
+  const matches = raw.match(/-?\(?\$?\s?\d[\d,]*(?:\.\d{1,2})?\)?/g);
+  if (!matches || !matches.length) return null;
+  const last = matches[matches.length-1];
+  let amount = parseFloat(last.replace(/[\$,()\s]/g,''));
+  if (Number.isNaN(amount) || amount === 0) return null;
+  const desc = raw.slice(0, raw.lastIndexOf(last)).replace(/^[\s,|-]+|[\s,|-]+$/g,'') || 'Transaction';
+  const category = classify(desc);
+  if (category === 'Skip') return null;
+  if (amount > 0 && /payroll|deposit|refund|interest\s?earned/i.test(desc)) return null;
+  return { owner, desc, amount: Math.abs(amount), category };
+}
+function parseBlock(text, owner){
+  return text.split('\n').map(l => parseLine(l, owner)).filter(Boolean);
+}
+function deriveCategoriesFromTransactions(){
+  const totals = {Housing:0, Utilities:0, Groceries:0, Dining:0, Subscriptions:0, Misc:0};
+  for (const t of state.transactions){ totals[t.category] = (totals[t.category]||0) + t.amount; }
+  state.categories = totals;
+}
+
+// ---------- debt math ----------
+function simulatePayoff(debts, strategy, extraMonthly){
+  const list = debts.filter(d=>d.balance>0).map(d=>({...d}));
+  if (!list.length) return { months:0, totalInterest:0, schedule:[{month:0, balance:0}] };
+  const order = strategy === 'avalanche'
+    ? [...list].sort((a,b)=> b.apr - a.apr)
+    : [...list].sort((a,b)=> a.balance - b.balance);
+  const baseMinBudget = list.reduce((s,d)=>s+d.minPayment, 0);
+  let month = 0, totalInterest = 0;
+  const schedule = [{month:0, balance: list.reduce((s,d)=>s+d.balance,0)}];
+  const MAX_MONTHS = 480;
+  while (list.some(d=>d.balance>0.01) && month < MAX_MONTHS){
+    month++;
+    let minSpent = 0;
+    for (const d of list){
+      if (d.balance<=0) continue;
+      const interest = d.balance * (d.apr/100/12);
+      totalInterest += interest;
+      d.balance += interest;
+      const pay = Math.min(d.minPayment, d.balance);
+      d.balance -= pay;
+      minSpent += pay;
+    }
+    let pool = extraMonthly + (baseMinBudget - minSpent);
+    for (const d of order){
+      if (pool<=0) break;
+      if (d.balance<=0) continue;
+      const pay = Math.min(pool, d.balance);
+      d.balance -= pay;
+      pool -= pay;
+    }
+    const bal = clamp0(list.reduce((s,d)=>s+clamp0(d.balance),0));
+    schedule.push({month, balance: bal});
+  }
+  return { months: month, totalInterest, schedule };
+}
+function addMonths(date, n){ const d = new Date(date); d.setMonth(d.getMonth()+n); return d; }
+function fmtMonthYear(date){ return date.toLocaleDateString('en-US', {month:'short', year:'numeric'}); }
+function fmtDuration(months){
+  if (months<=0) return 'debt-free now';
+  const y = Math.floor(months/12), m = months%12;
+  const parts = [];
+  if (y) parts.push(y+'yr');
+  if (m || !y) parts.push(m+'mo');
+  return parts.join(' ');
+}
+function investFV(monthly, annualRate, months){
+  const r = annualRate/12;
+  if (r===0) return monthly*months;
+  return monthly * (((Math.pow(1+r, months)-1))/r);
+}
+
+// ---------- derived dashboard ----------
+function dashboard(){
+  const incomeTotal = state.income.you + state.income.spouse;
+  const living = Object.entries(state.categories).reduce((s,[k,v])=>s+v,0);
+  const debtMin = state.debts.reduce((s,d)=>s+d.minPayment,0);
+  const totalObligated = living + debtMin;
+  const surplus = incomeTotal - totalObligated;
+  const extra = Math.min(Math.max(state.extraPayment,0), Math.max(surplus,0));
+  const freeCash = surplus - extra;
+  const savingsRate = incomeTotal>0 ? surplus/incomeTotal : 0;
+  const totalDebt = state.debts.reduce((s,d)=>s+d.balance,0);
+  const payoff = simulatePayoff(state.debts, state.strategy, extra);
+  const payoffAvalanche = simulatePayoff(state.debts, 'avalanche', extra);
+  const payoffSnowball = simulatePayoff(state.debts, 'snowball', extra);
+  return { incomeTotal, living, debtMin, totalObligated, surplus, extra, freeCash, savingsRate, totalDebt, payoff, payoffAvalanche, payoffSnowball };
+}
+
+// ---------- recommendations ----------
+function buildRecommendations(d){
+  const recs = [];
+  const c = state.categories;
+  if ((c.Subscriptions||0) > 0){
+    recs.push({id:'sub', title:'Audit recurring subscriptions', detail:'Cancel or downgrade the ones you forgot you had.', impact: c.Subscriptions*0.35, apply:()=>{ c.Subscriptions = c.Subscriptions*0.65; }});
+  }
+  if ((c.Dining||0) > d.incomeTotal*0.05){
+    recs.push({id:'dine', title:'Cap dining & delivery spend', detail:'Set a weekly takeout budget instead of an open tab.', impact: c.Dining*0.3, apply:()=>{ c.Dining = c.Dining*0.7; }});
+  }
+  if ((c.Utilities||0) > 0){
+    recs.push({id:'util', title:'Trim utility overhead', detail:'Programmable thermostat, LED swaps, or a provider/bundle switch.', impact: c.Utilities*0.15, apply:()=>{ c.Utilities = c.Utilities*0.85; }});
+  }
+  if ((c.Misc||0) > d.incomeTotal*0.04){
+    recs.push({id:'misc', title:'Review miscellaneous spend', detail:'Small recurring charges add up fastest here.', impact: c.Misc*0.2, apply:()=>{ c.Misc = c.Misc*0.8; }});
+  }
+  if (state.strategy !== 'avalanche'){
+    const gap = d.payoffSnowball.totalInterest - d.payoffAvalanche.totalInterest;
+    if (gap > 50){
+      recs.push({id:'strategy', title:'Switch to Debt Avalanche', detail:'Target your highest-APR balance first to cut total interest paid.', impact: gap/Math.max(d.payoffAvalanche.months,1), apply:()=>{ state.strategy='avalanche'; }, isTotal:true, totalLabel: fmtUSD(gap)+' saved over the payoff'});
+    }
+  }
+  if ((c.Housing||0) > d.incomeTotal*0.38){
+    recs.push({id:'house', title:'Revisit housing cost', detail:'Housing is a large share of income — negotiate rent or consider refinancing.', impact: c.Housing*0.04, apply:()=>{ c.Housing = c.Housing*0.96; }});
+  }
+  recs.sort((a,b)=> b.impact - a.impact);
+  return recs.slice(0,6);
+}
+
+// ---------- rendering ----------
+let catChart, payoffChart;
+let recDoneIds = new Set();
+let showCatTable = false;
+
+function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function flashTile(name){
+  const el = document.querySelector('[data-tile="'+name+'"]');
+  if (!el) return;
+  el.classList.add('flash');
+  setTimeout(()=> el.classList.remove('flash'), 900);
+}
+
+function renderAll(flashNames){
+  const d = dashboard();
+  document.getElementById('incomeTotalLabel').textContent = fmtUSD(d.incomeTotal);
+  document.getElementById('tileIncome').textContent = fmtUSD(d.incomeTotal);
+  document.getElementById('tileExpenses').textContent = fmtUSD(d.totalObligated);
+  document.getElementById('tileSurplus').textContent = fmtUSD(d.surplus);
+  document.getElementById('tileSavings').textContent = fmtPct(d.savingsRate);
+  document.getElementById('tileDebt').textContent = fmtUSD(d.totalDebt);
+  document.getElementById('tileInterest').textContent = fmtUSD(d.payoff.totalInterest);
+  document.getElementById('tileFreeDate').textContent = fmtMonthYear(addMonths(TODAY, d.payoff.months));
+  document.getElementById('tileFreeCash').textContent = fmtUSD(d.freeCash);
+
+  const statusEl = document.getElementById('hdrStatusBadge');
+  let statusCls='badge-good', statusTxt='On track', icon='good';
+  if (d.savingsRate < 0){ statusCls='badge-critical'; statusTxt='Overspending'; }
+  else if (d.savingsRate < 0.12){ statusCls='badge-warning'; statusTxt='Tight'; }
+  statusEl.className = 'badge ' + statusCls;
+  statusEl.innerHTML = iconFor(statusCls) + statusTxt;
+  document.getElementById('hdrFreeDate').textContent = 'Debt-free ' + fmtMonthYear(addMonths(TODAY, d.payoff.months));
+
+  const total = Math.max(d.incomeTotal,1);
+  document.getElementById('meterObligated').style.width = (100*d.totalObligated/total)+'%';
+  document.getElementById('meterExtra').style.width = (100*d.extra/total)+'%';
+  document.getElementById('meterFree').style.width = (100*Math.max(d.freeCash,0)/total)+'%';
+  document.getElementById('legObligated').textContent = fmtUSD(d.totalObligated);
+  document.getElementById('legExtra').textContent = fmtUSD(d.extra);
+  document.getElementById('legFree').textContent = fmtUSD(d.freeCash);
+
+  renderDebtList();
+  renderCatChart(d);
+  renderPayoffChart(d);
+  renderRecommendations(d);
+  document.getElementById('strategyHint').textContent = state.strategy==='avalanche'
+    ? 'Pays the highest interest rate first — usually the least total interest.'
+    : 'Pays the smallest balance first — quick wins for motivation.';
+  document.querySelectorAll('#strategySeg .seg-btn').forEach(b=>{
+    b.classList.toggle('active', b.dataset.strategy===state.strategy);
+  });
+  document.getElementById('debtCountLabel').textContent = state.debts.length + ' tracked';
+
+  (flashNames||[]).forEach(flashTile);
+}
+
+function iconFor(cls){
+  if (cls==='badge-good') return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17L4 12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  if (cls==='badge-warning') return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 3L22 20H2L12 3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 9v5M12 17h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+  return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M15 9l-6 6M9 9l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+}
+
+function renderDebtList(){
+  const wrap = document.getElementById('debtList');
+  wrap.innerHTML = '';
+  state.debts.slice().sort((a,b)=>b.apr-a.apr).forEach(debt=>{
+    const row = document.createElement('div');
+    row.className = 'card-soft p-2.5';
+    const aprCls = debt.apr>=20 ? 'badge-critical' : debt.apr>=10 ? 'badge-warning' : 'badge-neutral';
+    row.innerHTML = `
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0">
+          <p class="text-sm font-semibold truncate">${escapeHtml(debt.name)}</p>
+          <p class="text-xs text-[var(--ink-3)] tnum">${fmtUSD(debt.balance)} bal · ${fmtUSD(debt.minPayment)}/mo min</p>
+        </div>
+        <button class="text-[var(--ink-3)] hover:text-[var(--critical)] shrink-0" data-del="${debt.id}" aria-label="Remove ${escapeHtml(debt.name)}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <span class="badge ${aprCls} mt-1.5">${debt.apr.toFixed(1)}% APR</span>
+    `;
+    wrap.appendChild(row);
+  });
+  wrap.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      state.debts = state.debts.filter(d=>d.id!==btn.dataset.del);
+      renderAll(['debt','interest','freedate']);
+    });
+  });
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function categoryRows(d){
+  const rows = Object.entries(state.categories).map(([k,v])=>({key:k, label:CATEGORY_META[k].label, slot:CATEGORY_META[k].slot, value:v}));
+  rows.push({key:'Debt Service', label:'Debt Service (min)', slot:CATEGORY_META['Debt Service'].slot, value:d.debtMin});
+  rows.sort((a,b)=>b.value-a.value);
+  return rows;
+}
+
+function renderCatChart(d){
+  const rows = categoryRows(d);
+  const income = Math.max(d.incomeTotal,1);
+  const leakThresholds = {Subscriptions:0.03, Dining:0.06, Misc:0.05, Utilities:0.06};
+
+  const table = document.getElementById('catTable');
+  document.getElementById('catChartWrap').classList.toggle('hidden', showCatTable);
+  table.classList.toggle('hidden', !showCatTable);
+  if (showCatTable){
+    table.innerHTML = `<table class="w-full text-xs"><thead><tr class="text-left text-[var(--ink-3)]">
+      <th class="py-1.5 font-semibold">Category</th><th class="py-1.5 font-semibold text-right">Monthly</th><th class="py-1.5 font-semibold text-right">% of income</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr class="border-t hairline"><td class="py-1.5">${r.label}</td><td class="py-1.5 text-right tnum">${fmtUSD(r.value)}</td><td class="py-1.5 text-right tnum">${fmtPct(r.value/income)}</td></tr>`).join('')}</tbody></table>`;
+  }
+
+  if (catChart) catChart.destroy();
+  const ctx = document.getElementById('catChart').getContext('2d');
+  const ink2 = cssVar('--ink-2'), grid = cssVar('--grid'), surface = cssVar('--surface'), ink1 = cssVar('--ink-1');
+  catChart = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels: rows.map(r=>r.label + (leakThresholds[r.key] && r.value/income>leakThresholds[r.key] ? '  *' : '')),
+      datasets:[{
+        data: rows.map(r=>r.value),
+        backgroundColor: rows.map(r=>cssVar(r.slot)),
+        borderRadius: 6,
+        barThickness: 18
+      }]
+    },
+    options:{
+      indexAxis:'y',
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        tooltip:{
+          backgroundColor: surface, titleColor: ink1, bodyColor: ink1, borderColor: grid, borderWidth:1, padding:10,
+          callbacks:{ label:(c)=> fmtUSD(c.parsed.x) + '  (' + fmtPct(c.parsed.x/income) + ' of income)' }
+        }
+      },
+      scales:{
+        x:{ grid:{color:grid, drawTicks:false}, border:{display:false}, ticks:{color:ink2, font:{size:10}, callback:(v)=>fmtUSD(v,{notation:'compact'})} },
+        y:{ grid:{display:false}, border:{display:false}, ticks:{color:ink2, font:{size:11}} }
+      }
+    }
+  });
+}
+
+function renderPayoffChart(d){
+  if (payoffChart) payoffChart.destroy();
+  const ctx = document.getElementById('payoffChart').getContext('2d');
+  const ink2 = cssVar('--ink-2'), grid = cssVar('--grid'), surface = cssVar('--surface'), ink1 = cssVar('--ink-1');
+  const s1 = cssVar('--slot-1'), s7 = cssVar('--slot-7');
+  const maxLen = Math.max(d.payoffAvalanche.schedule.length, d.payoffSnowball.schedule.length);
+  const labels = Array.from({length:maxLen}, (_,i)=> i===0 ? 'Now' : fmtMonthYear(addMonths(TODAY,i)));
+  const pad = (sched)=>{
+    const arr = sched.map(p=>p.balance);
+    while (arr.length < maxLen) arr.push(0);
+    return arr;
+  };
+  const avalancheActive = state.strategy==='avalanche';
+  payoffChart = new Chart(ctx, {
+    type:'line',
+    data:{
+      labels,
+      datasets:[
+        {
+          label:'Avalanche', data: pad(d.payoffAvalanche.schedule), borderColor:s1,
+          backgroundColor: avalancheActive ? s1+'22' : 'transparent',
+          borderWidth: avalancheActive?2.5:1.5, borderDash: avalancheActive?[]:[5,4],
+          pointRadius:0, fill: avalancheActive, tension:.25
+        },
+        {
+          label:'Snowball', data: pad(d.payoffSnowball.schedule), borderColor:s7,
+          backgroundColor: !avalancheActive ? s7+'22' : 'transparent',
+          borderWidth: !avalancheActive?2.5:1.5, borderDash: !avalancheActive?[]:[5,4],
+          pointRadius:0, fill: !avalancheActive, tension:.25
+        }
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{display:false},
+        tooltip:{
+          backgroundColor: surface, titleColor: ink1, bodyColor: ink1, borderColor: grid, borderWidth:1, padding:10,
+          callbacks:{ label:(c)=> c.dataset.label + ': ' + fmtUSD(c.parsed.y) }
+        }
+      },
+      scales:{
+        x:{ grid:{display:false}, border:{display:false}, ticks:{color:ink2, font:{size:10}, maxTicksLimit:6} },
+        y:{ grid:{color:grid}, border:{display:false}, ticks:{color:ink2, font:{size:10}, callback:(v)=>fmtUSD(v,{notation:'compact'})} }
+      }
+    }
+  });
+
+  const sum = document.getElementById('payoffSummary');
+  const rows = [
+    {label:'Avalanche', p:d.payoffAvalanche, color:s1, active:avalancheActive},
+    {label:'Snowball', p:d.payoffSnowball, color:s7, active:!avalancheActive}
+  ];
+  sum.innerHTML = rows.map(r=>`
+    <div class="card-soft p-3 ${r.active ? '' : 'opacity-70'}">
+      <p class="flex items-center gap-1.5 font-semibold text-xs"><span class="w-2 h-2 rounded-full inline-block" style="background:${r.color}"></span>${r.label}${r.active?' <span class=\"badge badge-good ml-1\">active</span>':''}</p>
+      <p class="mt-1 tnum"><span class="font-display font-bold">${fmtDuration(r.p.months)}</span> to debt-free</p>
+      <p class="text-[var(--ink-3)] tnum">${fmtUSD(r.p.totalInterest)} total interest · done ${fmtMonthYear(addMonths(TODAY,r.p.months))}</p>
+    </div>`).join('');
+}
+
+function renderRecommendations(d){
+  const list = buildRecommendations(d);
+  const wrap = document.getElementById('recList');
+  if (!list.length){ wrap.innerHTML = '<p class="text-sm text-[var(--ink-3)]">Nothing urgent — spending looks lean relative to income.</p>'; return; }
+  const maxImpact = Math.max(...list.map(r=>r.impact), 1);
+  wrap.innerHTML = list.map(r=>{
+    const done = recDoneIds.has(r.id);
+    const pct = Math.max(8, 100*r.impact/maxImpact);
+    return `
+    <div class="rec-row ${done?'done':''}" data-rec="${r.id}">
+      <div class="flex items-start gap-3">
+        <input type="checkbox" class="mt-1 accent-[var(--accent)]" ${done?'checked':''} data-rec-check="${r.id}">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center justify-between gap-2">
+            <p class="rec-title text-sm font-semibold">${r.title}</p>
+            <span class="text-sm font-bold tnum shrink-0" style="color:var(--good)">${r.isTotal ? r.totalLabel : '+'+fmtUSD(r.impact)+'/mo'}</span>
+          </div>
+          <p class="text-xs text-[var(--ink-3)] mt-0.5">${r.detail}</p>
+          <div class="meter-track mt-1.5" style="height:5px"><div class="meter-fill" style="width:${pct}%;background:var(--accent)"></div></div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('[data-rec-check]').forEach(cb=>{
+    cb.addEventListener('change', ()=>{
+      const rec = list.find(r=>r.id===cb.dataset.recCheck);
+      if (!rec) return;
+      if (cb.checked){
+        recDoneIds.add(rec.id);
+        rec.apply();
+        addCoachMessage('coach', `Nice — I applied "${rec.title}" and updated your numbers. ${rec.isTotal ? rec.totalLabel : 'That frees up about ' + fmtUSD(rec.impact) + '/mo.'}`);
+        renderAll(['expenses','surplus','savings','freecash','debt','interest','freedate']);
+      } else {
+        recDoneIds.delete(rec.id);
+      }
+    });
+  });
+}
+
+document.getElementById('toggleCatTable').addEventListener('click', ()=>{
+  showCatTable = !showCatTable;
+  document.getElementById('toggleCatTable').textContent = showCatTable ? 'View as chart' : 'View as table';
+  renderCatChart(dashboard());
+});
+
+// ---------- input wiring ----------
+document.getElementById('incomeYou').addEventListener('input', e=>{ state.income.you = parseFloat(e.target.value)||0; renderAll(['income','surplus','savings','freecash']); });
+document.getElementById('incomeSpouse').addEventListener('input', e=>{ state.income.spouse = parseFloat(e.target.value)||0; renderAll(['income','surplus','savings','freecash']); });
+document.getElementById('extraPayment').addEventListener('input', e=>{ state.extraPayment = parseFloat(e.target.value)||0; renderAll(['surplus','freecash','interest','freedate']); });
+
+document.getElementById('strategySeg').addEventListener('click', e=>{
+  const btn = e.target.closest('[data-strategy]');
+  if (!btn) return;
+  state.strategy = btn.dataset.strategy;
+  renderAll(['interest','freedate']);
+});
+
+document.getElementById('addDebtBtn').addEventListener('click', ()=>{
+  const name = document.getElementById('newDebtName').value.trim();
+  const balance = parseFloat(document.getElementById('newDebtBalance').value);
+  const apr = parseFloat(document.getElementById('newDebtApr').value);
+  const minPayment = parseFloat(document.getElementById('newDebtMin').value);
+  if (!name || !(balance>0) || !(apr>=0) || !(minPayment>=0)) return;
+  state.debts.push({id:uid(), name, balance, apr, minPayment});
+  ['newDebtName','newDebtBalance','newDebtApr','newDebtMin'].forEach(id=>document.getElementById(id).value='');
+  renderAll(['debt','interest','freedate']);
+});
+
+document.getElementById('parseBtn').addEventListener('click', ()=>{
+  const you = parseBlock(document.getElementById('pasteYou').value, 'you');
+  const spouse = parseBlock(document.getElementById('pasteSpouse').value, 'spouse');
+  state.transactions = [...you, ...spouse];
+  deriveCategoriesFromTransactions();
+  document.getElementById('parseStatus').textContent = `Parsed ${state.transactions.length} transactions across both accounts.`;
+  renderAll(['expenses','surplus','savings','freecash']);
+  addCoachMessage('coach', `Got it — I re-sorted ${state.transactions.length} transactions into your budget categories and refreshed every number on the dashboard.`);
+});
+
+document.getElementById('pasteYou').value = SAMPLE_YOU;
+document.getElementById('pasteSpouse').value = SAMPLE_SPOUSE;
+state.transactions = [...parseBlock(SAMPLE_YOU,'you'), ...parseBlock(SAMPLE_SPOUSE,'spouse')];
+deriveCategoriesFromTransactions();
+document.getElementById('parseStatus').textContent = `Sample data: ${state.transactions.length} transactions parsed. Replace the text above with your own export and click Parse.`;
+
+// ---------- coach NLU ----------
+const CATEGORY_KEYWORDS = [
+  [/grocer/i,'Groceries'], [/hous(e|ing)|rent|mortgage/i,'Housing'], [/utilit/i,'Utilities'],
+  [/subscript/i,'Subscriptions'], [/din(e|ing)|restaurant|eating out|takeout/i,'Dining'], [/misc/i,'Misc']
+];
+
+function findCategoryKeyword(text){
+  for (const [re,cat] of CATEGORY_KEYWORDS){ if (re.test(text)) return cat; }
+  return null;
+}
+function findDollarAmount(text){
+  const m = text.match(/\$?\s?([\d,]+(?:\.\d+)?)/);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(/,/g,''));
+  return Number.isNaN(n) ? null : n;
+}
+
+function coachRespond(raw){
+  const text = raw.toLowerCase();
+  const d = dashboard();
+
+  // affirmative reply to a pending proposal
+  if (state.pendingProposal && /^(yes|yep|yeah|sure|do it|apply|let'?s do that|sounds good|go for it|please)/.test(text.trim())){
+    const p = state.pendingProposal;
+    state.pendingProposal = null;
+    p.apply();
+    renderAll(['surplus','freecash','interest','freedate']);
+    return { text: p.confirmText };
+  }
+
+  // "lowered/cut/reduced X by $Y" — apply immediately, roll savings into extra debt payment
+  if (/lower|reduce|cut|save/.test(text) && /by/.test(text)){
+    const amount = findDollarAmount(text);
+    const cat = findCategoryKeyword(text);
+    if (amount && cat && state.categories[cat] !== undefined){
+      const before = simulatePayoff(state.debts, state.strategy, d.extra);
+      state.categories[cat] = clamp0(state.categories[cat] - amount);
+      state.extraPayment = state.extraPayment + amount;
+      const d2 = dashboard();
+      renderAll(['expenses','surplus','savings','freecash','interest','freedate']);
+      const monthsSaved = before.months - d2.payoff.months;
+      const interestSaved = before.totalInterest - d2.payoff.totalInterest;
+      return { text: `Updated. ${CATEGORY_META[cat].label} is now ${fmtUSD(state.categories[cat])}/mo, and I rolled the ${fmtUSD(amount)} straight into your extra debt payment (now ${fmtUSD(state.extraPayment)}/mo). You'll be debt-free by <b>${fmtMonthYear(addMonths(TODAY, d2.payoff.months))}</b> — that's ${monthsSaved} month${monthsSaved===1?'':'s'} sooner and ${fmtUSD(interestSaved)} less interest.` };
+    }
+  }
+
+  // extra payment vs. investing comparison
+  if (/extra|additional/.test(text) && /(invest|instead of investing|market)/.test(text) || (/extra|additional/.test(text) && /highest.interest|highest.apr|card/.test(text))){
+    const amount = findDollarAmount(text) || 300;
+    const withoutExtra = simulatePayoff(state.debts, 'avalanche', d.extra);
+    const withExtra = simulatePayoff(state.debts, 'avalanche', d.extra + amount);
+    const interestSaved = withoutExtra.totalInterest - withExtra.totalInterest;
+    const monthsSaved = withoutExtra.months - withExtra.months;
+    const topApr = state.debts.length ? Math.max(...state.debts.map(dd=>dd.apr)) : 0;
+    const fv = investFV(amount, state.investReturnRate, 12);
+    const contributed = amount*12;
+    state.pendingProposal = {
+      amount,
+      confirmText: `Done — extra debt payment is now ${fmtUSD(d.extra+amount)}/mo. New debt-free date: ${fmtMonthYear(addMonths(TODAY, withExtra.months))}.`,
+      apply(){ state.extraPayment = state.extraPayment + amount; }
+    };
+    return { text: `Putting an extra ${fmtUSD(amount)}/mo toward your highest-rate balance (${topApr.toFixed(1)}% APR) instead of investing it:<br><br>
+      <b>Debt-first:</b> saves ${fmtUSD(interestSaved)} in interest and gets you debt-free ${monthsSaved} month${monthsSaved===1?'':'s'} sooner (${fmtMonthYear(addMonths(TODAY, withExtra.months))}).<br>
+      <b>Invest instead:</b> at an assumed 7%/yr return, ${fmtUSD(amount)}/mo for 12 months grows to about ${fmtUSD(fv)} (you'd contribute ${fmtUSD(contributed)}).<br><br>
+      Since ${topApr.toFixed(1)}% is a guaranteed return and well above 7%, paying the card down first wins mathematically here. Want me to apply it? Just say "do it".` };
+  }
+
+  if (/cut utilit/.test(text)){
+    state.categories.Utilities = (state.categories.Utilities||0)*0.85;
+    renderAll(['expenses','surplus','savings','freecash']);
+    return { text: `Applied — Utilities trimmed to ${fmtUSD(state.categories.Utilities)}/mo.` };
+  }
+  if (/utilit/.test(text)){
+    return { text: `Your Utilities line is running ${fmtUSD(state.categories.Utilities||0)}/mo. Practical cuts: a smart/programmable thermostat (typically 8–12% off heating &amp; cooling), LED bulbs and power strips for standby draw, bundling internet with a promo rate or calling to price-match a competitor, and checking if your utility offers a budget billing or low-income tariff. Say "cut utilities" and I'll model a 15% reduction.` };
+  }
+  if (/cut subscript/.test(text)){
+    state.categories.Subscriptions = (state.categories.Subscriptions||0)*0.65;
+    renderAll(['expenses','surplus','savings','freecash']);
+    return { text: `Done — Subscriptions down to ${fmtUSD(state.categories.Subscriptions)}/mo.` };
+  }
+  if (/subscript/.test(text)){
+    return { text: `Subscriptions total ${fmtUSD(state.categories.Subscriptions||0)}/mo. Worth checking: streaming overlap (do you need Netflix and Disney+ and Hulu?), the gym membership you haven't used, and any free trials that converted to paid. Say "cut subscriptions" and I'll estimate trimming a third of it.` };
+  }
+  if (/switch to (the )?avalanche|use avalanche/.test(text)){
+    state.strategy = 'avalanche';
+    renderAll(['interest','freedate']);
+    return { text: `Switched to Avalanche. You're now on track for ${fmtMonthYear(addMonths(TODAY, d.payoffAvalanche.months))}, paying ${fmtUSD(d.payoffAvalanche.totalInterest)} in total interest.` };
+  }
+  if (/switch to (the )?snowball|use snowball/.test(text)){
+    state.strategy = 'snowball';
+    renderAll(['interest','freedate']);
+    return { text: `Switched to Snowball. You're now on track for ${fmtMonthYear(addMonths(TODAY, d.payoffSnowball.months))} — ${fmtUSD(d.payoffSnowball.totalInterest - d.payoffAvalanche.totalInterest)} more interest than Avalanche, but faster early wins on small balances.` };
+  }
+  if (/avalanche|snowball/.test(text) && /(differen|vs|versus|compare|which)/.test(text)){
+    return { text: `Avalanche pays off in ${fmtDuration(d.payoffAvalanche.months)} for ${fmtUSD(d.payoffAvalanche.totalInterest)} total interest. Snowball pays off in ${fmtDuration(d.payoffSnowball.months)} for ${fmtUSD(d.payoffSnowball.totalInterest)}. Avalanche saves you ${fmtUSD(d.payoffSnowball.totalInterest - d.payoffAvalanche.totalInterest)} — Snowball just clears small balances faster if you need the motivation.` };
+  }
+  if (/debt.?free|when.*(pay off|paid off)/.test(text)){
+    return { text: `At ${fmtUSD(d.extra)}/mo extra on the ${state.strategy}, you're debt-free by <b>${fmtMonthYear(addMonths(TODAY, d.payoff.months))}</b> (${fmtDuration(d.payoff.months)} from now), paying ${fmtUSD(d.payoff.totalInterest)} in total interest.` };
+  }
+  if (/how are we doing|summary|status|overview/.test(text)){
+    return { text: `Here's where you stand: ${fmtUSD(d.incomeTotal)}/mo income, ${fmtUSD(d.totalObligated)}/mo in bills &amp; minimums, leaving a ${fmtUSD(d.surplus)} surplus (${fmtPct(d.savingsRate)} savings rate). You're sending ${fmtUSD(d.extra)}/mo extra at debt and have ${fmtUSD(d.freeCash)} truly free each month. Total debt is ${fmtUSD(d.totalDebt)}, debt-free by ${fmtMonthYear(addMonths(TODAY, d.payoff.months))}.` };
+  }
+
+  return { text: `Right now you're carrying ${fmtUSD(d.totalDebt)} in debt at a ${fmtPct(d.savingsRate)} savings rate, on pace to be debt-free by ${fmtMonthYear(addMonths(TODAY, d.payoff.months))}. Ask me about a specific category, "avalanche vs snowball", or try something like "we lowered groceries by $100 — how much faster is our debt-free date?"` };
+}
+
+// ---------- chat UI (mounted in desktop column + mobile drawer) ----------
+const chatHistory = [];
+function addCoachMessage(role, text){
+  chatHistory.push({role, text, ts: Date.now()});
+  renderChatMessages();
+}
+function renderChatMessages(){
+  document.querySelectorAll('[data-role="messages"]').forEach(container=>{
+    container.innerHTML = chatHistory.map(m=>`<div class="bubble ${m.role==='user'?'bubble-user':'bubble-coach'}">${m.text}</div>`).join('');
+    container.scrollTop = container.scrollHeight;
+  });
+}
+
+const SUGGESTIONS = [
+  "We just lowered our grocery bill by $150 — update our numbers and show how much faster we hit our debt-free date.",
+  "What are some practical ways to cut utility overhead given our current climate?",
+  "If we put an extra $300 a month toward our highest-interest card instead of investing it right now, what's the mathematical difference over 12 months?"
+];
+
+function mountCoach(container){
+  const tpl = document.getElementById('coachTemplate').content.cloneNode(true);
+  container.innerHTML = '';
+  container.appendChild(tpl);
+  const chipsWrap = container.querySelector('[data-role="chips"]');
+  chipsWrap.innerHTML = SUGGESTIONS.map((s,i)=>`<button type="button" class="chip shrink-0" data-suggestion="${i}">${s.length>46 ? s.slice(0,44)+'…' : s}</button>`).join('');
+  chipsWrap.querySelectorAll('[data-suggestion]').forEach(btn=>{
+    btn.addEventListener('click', ()=> handleUserMessage(SUGGESTIONS[+btn.dataset.suggestion]));
+  });
+  const form = container.querySelector('[data-role="form"]');
+  const input = container.querySelector('[data-role="input"]');
+  form.addEventListener('submit', e=>{
+    e.preventDefault();
+    const val = input.value.trim();
+    if (!val) return;
+    input.value = '';
+    handleUserMessage(val);
+  });
+  const closeBtn = container.querySelector('.coach-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
+}
+
+function handleUserMessage(text){
+  addCoachMessage('user', escapeHtml(text));
+  setTimeout(()=>{
+    const res = coachRespond(text);
+    addCoachMessage('coach', res.text);
+  }, 220);
+}
+
+mountCoach(document.getElementById('coachDesktopWrap'));
+mountCoach(document.getElementById('coachDrawer'));
+
+function openDrawer(){ document.getElementById('coachDrawer').classList.add('open'); document.getElementById('scrim').classList.add('open'); }
+function closeDrawer(){ document.getElementById('coachDrawer').classList.remove('open'); document.getElementById('scrim').classList.remove('open'); }
+document.getElementById('openCoachMobile').addEventListener('click', openDrawer);
+document.getElementById('scrim').addEventListener('click', closeDrawer);
+
+// ---------- theme-responsive chart redraw ----------
+if (window.matchMedia){
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=> renderAll());
+}
+
+// ---------- boot ----------
+renderAll();
+addCoachMessage('coach', `Hi, I'm your live coach. Quick read on your household: ${fmtUSD(dashboard().incomeTotal)}/mo income, ${fmtUSD(dashboard().totalDebt)} in debt, and you're on track to be debt-free by <b>${fmtMonthYear(addMonths(TODAY, dashboard().payoff.months))}</b>. Ask me anything, or try a suggestion below.`);
+
+})();
+</script>
