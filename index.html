@@ -268,6 +268,16 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
 
       <section class="card p-4 space-y-3">
         <div class="flex items-center justify-between">
+          <h2 class="font-display font-bold text-sm">Income review</h2>
+          <span id="incomeTxnCountLabel" class="text-[.65rem] text-[var(--ink-3)]"></span>
+        </div>
+        <p class="text-xs text-[var(--ink-2)]">Deposits we found in your import — mark each as recurring payroll or a one-time deposit (gift, refund, bonus).</p>
+        <div id="incomeSuggestBox" class="hidden card-soft p-2.5 text-xs"></div>
+        <div id="incomeList" class="space-y-1 max-h-72 overflow-y-auto scrollbar-thin pr-1"></div>
+      </section>
+
+      <section class="card p-4 space-y-3">
+        <div class="flex items-center justify-between">
           <h2 class="font-display font-bold text-sm">Debts</h2>
           <span id="debtCountLabel" class="text-[.65rem] text-[var(--ink-3)]"></span>
         </div>
@@ -354,6 +364,16 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
         <p class="text-[.72rem] text-[var(--ink-3)] mb-2">Ranked by monthly spend · <span class="font-bold" style="color:var(--warning)">*</span> flagged as a likely money leak</p>
         <div class="chart-wrap" id="catChartWrap" style="height:280px"><canvas id="catChart"></canvas></div>
         <div id="catTable" class="hidden"></div>
+      </section>
+
+      <section class="card p-4">
+        <div class="flex items-center justify-between mb-1">
+          <h3 class="font-display font-bold text-sm">Monthly spending</h3>
+          <span id="ytdTotalLabel" class="text-[.68rem] text-[var(--ink-3)] tnum"></span>
+        </div>
+        <p class="text-[.72rem] text-[var(--ink-3)] mb-2">Year to date, then each month broken out below it — newest first.</p>
+        <div class="chart-wrap" style="height:180px"><canvas id="ytdChart"></canvas></div>
+        <div id="monthCards" class="space-y-3 mt-3"></div>
       </section>
 
       <section class="card p-4">
@@ -469,32 +489,44 @@ function addCategory(name){
   return key;
 }
 
-// Skip rules are checked first (in classify()) so an internal transfer or debt
-// payment is never miscategorized into a spending bucket by an incidental
-// keyword collision (e.g. "Internet Access" inside a transfer memo vs. an
-// actual internet bill).
+// A positive amount is always routed to income review (never guessed at
+// here), and an internal transfer between the household's own accounts is
+// always pure noise — so classify() only ever sees real expenses, and only
+// needs one structural Skip rule left (transfers). Everything else below is
+// an actual spending category.
+function isInternalTransfer(desc){ return /home\s?banking\s?transfer|internal\s?transfer/i.test(desc); }
+
 const CATEGORY_RULES = [
-  [/autopay|card\s?payment|credit\s?card|credit\s?crd|loan\s?pymt|loan\s?payment|to\s+loan\b|thank\s?you.*payment|payment.*thank\s?you|capital\s?one\s?pymt|discover\s?pymt/i, 'Skip'],
   [/home\s?banking\s?transfer|internal\s?transfer/i, 'Skip'],
-  [/payroll|direct\s?dep|deposit|refund|interest\s?earned|transfer\s?in/i, 'Skip'],
-  [/rent|mortgage|apartment|property\s?mgmt|landlord/i, 'Housing'],
+  [/rent|mortgage|apartment|property\s?mgmt|landlord/i, 'Home/Mortgage'],
+  [/home\s?depot|lowe'?s|menards|ace\s?hardware|hardware\s?store|tractor\s?supply/i, 'Home Improvement'],
+  [/amazon|wayfair|\bikea\b|bed\s?bath|homegoods|home\s?goods|pottery\s?barn/i, 'Home Goods'],
+  [/kroger|whole\s?foods|trader\s?joe|safeway|aldi|wal[\s-]?mart|publix|grocery|market\s?basket|harris\s?teeter/i, 'Groceries'],
+  [/shell\b|speedway|chevron|exxon|mobil\b|\bbp\b|marathon|circle\s?k|sunoco|gas\s?station|fuel/i, 'Fuel'],
+  [/\bcvs\b|walgreens|pharmacy|urgent\s?care|\bclinic\b|\bdentist\b|\bhospital\b|\bdoctor\b|medical/i, 'Pharmacy/Medical'],
   [/electric|power\s?co|water\s?dept|water\s?utility|\binternet\b|xfinity|comcast|spectrum|at&t|verizon|natural\s?gas|utility|utilities|\baes\s?ohio\b|duke\s?energy|dominion|con\s?edison|national\s?grid|ez\s?pay/i, 'Utilities'],
-  [/kroger|whole\s?foods|trader\s?joe|safeway|aldi|walmart\s?(supercenter)?|publix|grocery|market\s?basket|harris\s?teeter/i, 'Groceries'],
-  [/netflix|spotify|hulu|disney\+|hbo|apple\.com\/bill|youtube\s?premium|gym|planet\s?fitness|prime\s?video|audible|subscription|icloud/i, 'Subscriptions'],
-  [/doordash|uber\s?eats|grubhub|starbucks|chipotle|restaurant|cafe|pizza|taco|bar\s?tab|takeout|mcdonald/i, 'Dining']
+  [/netflix|spotify|hulu|disney\+|hbo|apple\.com\/bill|youtube\s?premium|steam|playstation|xbox|gaming|dispensary|cannabis|zen\s?leaf|gym|planet\s?fitness|prime\s?video|audible|icloud/i, 'Entertainment'],
+  [/doordash|uber\s?eats|grubhub|starbucks|chipotle|restaurant|cafe|pizza|taco|bar\s?tab|takeout|mcdonald/i, 'Dining'],
+  [/autopay|card\s?payment|credit\s?card|credit\s?crd|loan\s?pymt|loan\s?payment|to\s+loan\b|thank\s?you.*payment|payment.*thank\s?you|capital\s?one\s?pymt|discover\s?pymt/i, 'Credit/Debt Payment']
 ];
 
 const state = {
   income: { you: 0, spouse: 0 },
   transactions: [],
+  incomeTransactions: [],
   categories: {},
   categoryDefs: [
-    { key: 'Housing',       label: 'Housing',       slot: '--slot-1' },
-    { key: 'Utilities',     label: 'Utilities',     slot: '--slot-2' },
-    { key: 'Groceries',     label: 'Groceries',     slot: '--slot-3' },
-    { key: 'Dining',        label: 'Dining',        slot: '--slot-4' },
-    { key: 'Subscriptions', label: 'Subscriptions', slot: '--slot-5' },
-    { key: 'Misc',          label: 'Miscellaneous', slot: '--slot-7' }
+    { key: 'Home/Mortgage',       label: 'Home/Mortgage',       slot: '--slot-1' },
+    { key: 'Credit/Debt Payment', label: 'Credit/Debt Payment', slot: '--slot-2' },
+    { key: 'Groceries',           label: 'Groceries',           slot: '--slot-3' },
+    { key: 'Utilities',           label: 'Utilities',           slot: '--slot-4' },
+    { key: 'Dining',              label: 'Dining',               slot: '--slot-5' },
+    { key: 'Fuel',                label: 'Fuel',                 slot: '--slot-6' },
+    { key: 'Entertainment',       label: 'Entertainment',       slot: '--slot-7' },
+    { key: 'Home Improvement',    label: 'Home Improvement',    slot: null },
+    { key: 'Home Goods',          label: 'Home Goods',          slot: null },
+    { key: 'Pharmacy/Medical',    label: 'Pharmacy/Medical',    slot: null },
+    { key: 'Misc',                label: 'Miscellaneous',       slot: null }
   ],
   debts: [],
   strategy: 'avalanche',
@@ -604,6 +636,11 @@ function detectColumns(headerRow){
 
 // Falls back to "last number in the line is the amount, the rest is the description" —
 // handles free-form paste and any CSV row we couldn't map to known columns.
+// A row becomes one of three things: pure noise (an internal transfer —
+// discarded outright), an income candidate (any positive amount — never
+// silently dropped, always handed to income review since only the coach or
+// the household can tell recurring payroll from a one-time deposit), or a
+// classified expense (a negative amount, sorted into a spending category).
 function parseFreeformRow(cells, owner){
   const raw = cells.join(', ').trim();
   if (!raw) return null;
@@ -613,16 +650,19 @@ function parseFreeformRow(cells, owner){
   let amount = parseFloat(last.replace(/[\$,()\s]/g,''));
   if (Number.isNaN(amount) || amount === 0) return null;
   const desc = raw.slice(0, raw.lastIndexOf(last)).replace(/^[\s,|-]+|[\s,|-]+$/g,'') || 'Transaction';
-  if (amount > 0 && isIncomeLike(desc)) return null;
-  const category = classify(desc);
-  if (category === 'Skip') return null;
+  if (isInternalTransfer(desc)) return null;
   const dateMatch = raw.match(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/);
   const dateISO = dateMatch ? parseDateLoose(dateMatch[0]) : null;
-  return { id: uid(), owner, desc, amount: Math.abs(amount), category, dateISO };
+  if (amount > 0){
+    return { kind: 'income', id: uid(), owner, desc, amount: Math.abs(amount), dateISO, looksRecurring: isIncomeLike(desc), reviewed: false };
+  }
+  const category = classify(desc);
+  if (category === 'Skip') return null;
+  return { kind: 'spend', id: uid(), owner, desc, amount: Math.abs(amount), category, dateISO };
 }
 
 function rowsToTransactions(rows, owner){
-  if (!rows.length) return [];
+  if (!rows.length) return { transactions: [], incomeTransactions: [] };
   const headerIdx = findHeaderRowIndex(rows);
   let dataRows = rows, cols = null;
   if (headerIdx > -1){
@@ -630,11 +670,11 @@ function rowsToTransactions(rows, owner){
     dataRows = rows.slice(headerIdx + 1);
   }
   const hasAmountCols = cols && (cols.amount > -1 || cols.debit > -1 || cols.credit > -1);
-  const out = [];
+  const transactions = [], incomeTransactions = [];
+  const pushResult = (t) => { if (!t) return; if (t.kind === 'income') incomeTransactions.push(t); else transactions.push(t); };
   for (const r of dataRows){
     if (!hasAmountCols){
-      const t = parseFreeformRow(r, owner);
-      if (t) out.push(t);
+      pushResult(parseFreeformRow(r, owner));
       continue;
     }
     let amount = 0;
@@ -658,13 +698,17 @@ function rowsToTransactions(rows, owner){
       desc = r.filter((_,i) => !excluded.has(i)).join(' ').trim();
     }
     desc = desc || 'Transaction';
-    if (amount > 0 && isIncomeLike(desc)) continue;
+    if (isInternalTransfer(desc)) continue;
+    const dateISO = cols.date > -1 ? parseDateLoose(r[cols.date]) : null;
+    if (amount > 0){
+      incomeTransactions.push({ kind: 'income', id: uid(), owner, desc, amount: Math.abs(amount), dateISO, looksRecurring: isIncomeLike(desc), reviewed: false });
+      continue;
+    }
     const category = classify(desc);
     if (category === 'Skip') continue;
-    const dateISO = cols.date > -1 ? parseDateLoose(r[cols.date]) : null;
-    out.push({ id: uid(), owner, desc, amount: Math.abs(amount), category, dateISO });
+    transactions.push({ kind: 'spend', id: uid(), owner, desc, amount: Math.abs(amount), category, dateISO });
   }
-  return out;
+  return { transactions, incomeTransactions };
 }
 
 function parseBlock(text, owner){
@@ -779,7 +823,8 @@ function buildRecommendations(d){
 }
 
 // ---------- rendering ----------
-let catChart, payoffChart;
+let catChart, payoffChart, ytdChart;
+const monthCharts = new Map();
 let recDoneIds = new Set();
 let showCatTable = false;
 
@@ -827,6 +872,7 @@ function renderAll(flashNames){
   // need to render either way).
   try { renderCatChart(d); } catch (e){ console.error('renderCatChart failed:', e); chartFallback('catChart'); }
   try { renderPayoffChart(d); } catch (e){ console.error('renderPayoffChart failed:', e); chartFallback('payoffChart'); }
+  try { renderMonthlyBreakdown(); } catch (e){ console.error('renderMonthlyBreakdown failed:', e); }
   renderRecommendations(d);
   document.getElementById('strategyHint').textContent = state.strategy==='avalanche'
     ? 'Pays the highest interest rate first — usually the least total interest.'
@@ -903,6 +949,80 @@ function renderTxnList(){
       deriveCategoriesFromTransactions();
       renderAll(['expenses','surplus','savings','freecash']);
       renderTxnList();
+    });
+  });
+}
+
+// ---------- income review ----------
+// Suggests a monthly figure per owner from deposits marked (or auto-detected)
+// as recurring: average of that owner's recurring total per calendar month
+// they actually appear in, so one big one-time deposit never skews it.
+function suggestedIncomeByOwner(){
+  const byOwnerMonth = {};
+  state.incomeTransactions.forEach(t=>{
+    const recurring = t.reviewed ? t.recurring : t.looksRecurring;
+    if (!recurring || !t.dateISO) return;
+    const monthKey = t.dateISO.slice(0,7);
+    byOwnerMonth[t.owner] = byOwnerMonth[t.owner] || {};
+    byOwnerMonth[t.owner][monthKey] = (byOwnerMonth[t.owner][monthKey] || 0) + t.amount;
+  });
+  const result = {};
+  for (const owner of Object.keys(byOwnerMonth)){
+    const monthTotals = Object.values(byOwnerMonth[owner]);
+    result[owner] = monthTotals.length ? monthTotals.reduce((s,v)=>s+v,0) / monthTotals.length : 0;
+  }
+  return result;
+}
+
+function renderIncomeList(){
+  const wrap = document.getElementById('incomeList');
+  if (!wrap) return;
+  document.getElementById('incomeTxnCountLabel').textContent = state.incomeTransactions.length + ' found';
+
+  const suggestBox = document.getElementById('incomeSuggestBox');
+  const suggested = suggestedIncomeByOwner();
+  const hasSuggestion = (suggested.you > 0) || (suggested.spouse > 0);
+  if (hasSuggestion){
+    suggestBox.classList.remove('hidden');
+    suggestBox.innerHTML = `Recurring income detected: <b class="tnum">${fmtUSD(suggested.you||0)}</b> you, <b class="tnum">${fmtUSD(suggested.spouse||0)}</b> spouse (avg/mo).
+      <button id="applySuggestedIncomeBtn" class="apply-btn">Apply to income fields</button>`;
+    document.getElementById('applySuggestedIncomeBtn').addEventListener('click', ()=>{
+      state.income.you = Math.round(suggested.you || state.income.you);
+      state.income.spouse = Math.round(suggested.spouse || state.income.spouse);
+      document.getElementById('incomeYou').value = state.income.you;
+      document.getElementById('incomeSpouse').value = state.income.spouse;
+      renderAll(['income','surplus','savings','freecash']);
+    });
+  } else {
+    suggestBox.classList.add('hidden');
+    suggestBox.innerHTML = '';
+  }
+
+  if (!state.incomeTransactions.length){
+    wrap.innerHTML = '<p class="text-xs text-[var(--ink-3)] py-2">No deposits found yet — import transactions above.</p>';
+    return;
+  }
+  wrap.innerHTML = state.incomeTransactions.slice().sort((a,b)=>(b.dateISO||'').localeCompare(a.dateISO||'')).map(t=>{
+    const recurring = t.reviewed ? t.recurring : t.looksRecurring;
+    return `
+    <div class="flex items-center gap-1.5 text-xs py-1.5 border-t hairline first:border-t-0">
+      <span class="flex-1 min-w-0 truncate" title="${escapeHtml(t.desc)}">${escapeHtml(t.desc)}</span>
+      <span class="tnum shrink-0 w-16 text-right text-[var(--good)]">${fmtUSD(t.amount)}</span>
+      <div class="seg shrink-0" data-income-seg="${t.id}">
+        <div class="seg-btn ${recurring?'active':''}" data-val="recurring" style="padding:.2rem .45rem;font-size:.62rem;">Recurring</div>
+        <div class="seg-btn ${!recurring?'active':''}" data-val="one_time" style="padding:.2rem .45rem;font-size:.62rem;">One-time</div>
+      </div>
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('[data-income-seg]').forEach(seg=>{
+    seg.addEventListener('click', e=>{
+      const btn = e.target.closest('[data-val]');
+      if (!btn) return;
+      const t = state.incomeTransactions.find(x=>x.id===seg.dataset.incomeSeg);
+      if (!t) return;
+      t.reviewed = true;
+      t.recurring = btn.dataset.val === 'recurring';
+      renderIncomeList();
     });
   });
 }
@@ -1020,10 +1140,35 @@ function categoryRows(d){
   return rows;
 }
 
+// Non-destructive: hides the canvas and shows a sibling message, but never
+// removes the canvas element itself. An early version replaced the canvas's
+// container outright, which permanently deleted the canvas — so any later
+// render that re-queried it by id (e.g. to check "does this chart exist
+// yet") got null forever after the first failure, even on unrelated
+// elements sharing that render pass. unfallbackChart() below reverses this
+// once Chart.js becomes available (e.g. after the jsDelivr retry).
 function chartFallback(canvasId){
   const canvas = document.getElementById(canvasId);
-  const wrap = canvas ? canvas.closest('.chart-wrap') : null;
-  if (wrap) wrap.innerHTML = '<p class="text-xs text-[var(--ink-3)] p-3">Chart unavailable right now — your numbers elsewhere on the page are still accurate.</p>';
+  if (!canvas) return;
+  canvas.hidden = true;
+  const wrap = canvas.closest('.chart-wrap');
+  if (!wrap) return;
+  let msg = wrap.querySelector('.chart-fallback-msg');
+  if (!msg){
+    msg = document.createElement('p');
+    msg.className = 'chart-fallback-msg text-xs text-[var(--ink-3)] p-3';
+    msg.textContent = 'Chart unavailable right now — your numbers elsewhere on the page are still accurate.';
+    wrap.appendChild(msg);
+  }
+  msg.hidden = false;
+}
+function unfallbackChart(canvasId){
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  canvas.hidden = false;
+  const wrap = canvas.closest('.chart-wrap');
+  const msg = wrap && wrap.querySelector('.chart-fallback-msg');
+  if (msg) msg.hidden = true;
 }
 
 function renderCatChart(d){
@@ -1045,6 +1190,7 @@ function renderCatChart(d){
       <tbody>${rows.map(r=>`<tr class="border-t hairline"><td class="py-1.5">${r.label}</td><td class="py-1.5 text-right tnum">${fmtUSD(r.value)}</td><td class="py-1.5 text-right tnum">${fmtPct(r.value/income)}</td></tr>`).join('')}</tbody></table>`;
   }
   if (chartLibMissing) return;
+  unfallbackChart('catChart');
 
   if (catChart) catChart.destroy();
   const ctx = document.getElementById('catChart').getContext('2d');
@@ -1098,6 +1244,7 @@ function renderPayoffChart(d){
     </div>`).join('');
 
   if (typeof Chart === 'undefined'){ chartFallback('payoffChart'); return; }
+  unfallbackChart('payoffChart');
 
   if (payoffChart) payoffChart.destroy();
   const ctx = document.getElementById('payoffChart').getContext('2d');
@@ -1144,6 +1291,139 @@ function renderPayoffChart(d){
       }
     }
   });
+}
+
+// ---------- monthly spending: YTD + one card per month ----------
+function monthKeysThisYearWithSpend(){
+  const year = TODAY.getFullYear();
+  const set = new Set();
+  state.transactions.forEach(t => { if (t.dateISO && t.dateISO.startsWith(String(year))) set.add(t.dateISO.slice(0,7)); });
+  return Array.from(set).sort(); // ascending YYYY-MM
+}
+function totalForMonth(monthKey){
+  return state.transactions.filter(t => t.dateISO && t.dateISO.startsWith(monthKey)).reduce((s,t)=>s+t.amount,0);
+}
+function categoryTotalsForMonth(monthKey){
+  const totals = {};
+  state.transactions.forEach(t=>{
+    if (t.dateISO && t.dateISO.startsWith(monthKey)) totals[t.category] = (totals[t.category]||0) + t.amount;
+  });
+  return totals;
+}
+function monthLabel(monthKey){
+  const [y,m] = monthKey.split('-').map(Number);
+  return new Date(y, m-1, 1).toLocaleDateString('en-US', {month:'long', year:'numeric'});
+}
+function prevMonthKey(monthKey){
+  const [y,m] = monthKey.split('-').map(Number);
+  const d = new Date(y, m-2, 1); // m is 1-indexed; -2 steps one month back
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+
+function renderMonthlyBreakdown(){
+  const cardsWrap = document.getElementById('monthCards');
+  if (!cardsWrap) return;
+  const ytdCanvas = document.getElementById('ytdChart');
+
+  const months = monthKeysThisYearWithSpend(); // ascending
+  const year = TODAY.getFullYear();
+  const ytdTotal = months.reduce((s,mk)=>s+totalForMonth(mk), 0);
+  document.getElementById('ytdTotalLabel').textContent = `${fmtUSD(ytdTotal)} spent in ${year}`;
+
+  if (!months.length){
+    cardsWrap.innerHTML = '<p class="text-xs text-[var(--ink-3)] py-2">Import some dated transactions to see them broken out by month.</p>';
+  }
+
+  if (typeof Chart === 'undefined' || !ytdCanvas){
+    chartFallback('ytdChart');
+  } else {
+    unfallbackChart('ytdChart');
+    if (ytdChart) ytdChart.destroy();
+    const ink2 = cssVar('--ink-2'), grid = cssVar('--grid'), surface = cssVar('--surface'), ink1 = cssVar('--ink-1'), accent = cssVar('--accent');
+    // Full Jan..current-month axis so the shape of the year reads even with gaps.
+    const allMonthKeys = Array.from({length: TODAY.getMonth()+1}, (_,i) => `${year}-${String(i+1).padStart(2,'0')}`);
+    ytdChart = new Chart(ytdCanvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: allMonthKeys.map(mk => monthLabel(mk).split(' ')[0]),
+        datasets: [{ data: allMonthKeys.map(mk => totalForMonth(mk)), backgroundColor: accent, borderRadius: 5, barThickness: 22 }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { backgroundColor: surface, titleColor: ink1, bodyColor: ink1, borderColor: grid, borderWidth: 1, padding: 10,
+            callbacks: { label: (c) => fmtUSD(c.parsed.y) } }
+        },
+        scales: {
+          x: { grid: { display: false }, border: { display: false }, ticks: { color: ink2, font: { size: 10 } } },
+          y: { grid: { color: grid }, border: { display: false }, ticks: { color: ink2, font: { size: 10 }, callback: (v) => fmtUSD(v, {notation:'compact'}) } }
+        }
+      }
+    });
+  }
+
+  // Newest month first, directly under the YTD chart.
+  const newestFirst = months.slice().reverse();
+  cardsWrap.innerHTML = newestFirst.map(mk => {
+    const total = totalForMonth(mk);
+    const prevTotal = totalForMonth(prevMonthKey(mk));
+    const hasPrev = months.includes(prevMonthKey(mk));
+    let deltaHtml = '';
+    if (hasPrev){
+      const delta = total - prevTotal;
+      if (Math.abs(delta) >= 0.5){
+        const up = delta > 0;
+        deltaHtml = `<span class="tnum" style="color:${up?'var(--critical)':'var(--good)'}">${up?'+':'−'}${fmtUSD(Math.abs(delta))} vs last month</span>`;
+      } else {
+        deltaHtml = `<span class="text-[var(--ink-3)]">about the same as last month</span>`;
+      }
+    }
+    return `<div class="card-soft p-3">
+      <div class="flex items-center justify-between mb-1.5">
+        <p class="text-sm font-semibold">${monthLabel(mk)}</p>
+        <p class="text-xs tnum">${fmtUSD(total)} ${deltaHtml}</p>
+      </div>
+      <div class="chart-wrap" style="height:140px"><canvas id="monthChart-${mk}"></canvas></div>
+    </div>`;
+  }).join('');
+
+  // Destroy chart instances for months no longer rendered, then (re)build the current ones.
+  for (const [key, chart] of monthCharts){
+    if (!newestFirst.includes(key)) { chart.destroy(); monthCharts.delete(key); }
+  }
+  if (typeof Chart !== 'undefined'){
+    newestFirst.forEach(mk => {
+      const canvas = document.getElementById(`monthChart-${mk}`);
+      if (!canvas) return;
+      if (monthCharts.has(mk)) monthCharts.get(mk).destroy();
+      const totals = categoryTotalsForMonth(mk);
+      const rows = Object.entries(totals).filter(([,v]) => v > 0).map(([k,v]) => ({ key:k, label:categoryMeta(k).label, slot:categoryMeta(k).slot, value:v })).sort((a,b)=>b.value-a.value);
+      const ink2 = cssVar('--ink-2'), grid = cssVar('--grid'), surface = cssVar('--surface'), ink1 = cssVar('--ink-1');
+      const chart = new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: rows.map(r=>r.label),
+          datasets: [{ data: rows.map(r=>r.value), backgroundColor: rows.map(r=>cssVar(r.slot || '--ink-3')), borderRadius: 5, barThickness: 14 }]
+        },
+        options: {
+          indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { backgroundColor: surface, titleColor: ink1, bodyColor: ink1, borderColor: grid, borderWidth: 1, padding: 8,
+              callbacks: { label: (c) => fmtUSD(c.parsed.x) } }
+          },
+          scales: {
+            x: { grid: { color: grid, drawTicks:false }, border: { display: false }, ticks: { color: ink2, font: { size: 9 }, callback: (v)=>fmtUSD(v,{notation:'compact'}) } },
+            y: { grid: { display: false }, border: { display: false }, ticks: { color: ink2, font: { size: 9 } } }
+          }
+        }
+      });
+      monthCharts.set(mk, chart);
+    });
+  } else {
+    newestFirst.forEach(mk => chartFallback(`monthChart-${mk}`));
+  }
 }
 
 function renderRecommendations(d){
@@ -1217,17 +1497,40 @@ document.getElementById('addDebtBtn').addEventListener('click', ()=>{
 function runParse(announce){
   const you = parseBlock(document.getElementById('pasteYou').value, 'you');
   const spouse = parseBlock(document.getElementById('pasteSpouse').value, 'spouse');
-  state.transactions = [...you, ...spouse];
+  state.transactions = [...you.transactions, ...spouse.transactions];
+  state.incomeTransactions = [...you.incomeTransactions, ...spouse.incomeTransactions];
   deriveCategoriesFromTransactions();
-  document.getElementById('parseStatus').textContent = `Parsed ${state.transactions.length} transactions across both accounts.`;
+  document.getElementById('parseStatus').textContent = `Parsed ${state.transactions.length} spending transaction${state.transactions.length===1?'':'s'} and ${state.incomeTransactions.length} income deposit${state.incomeTransactions.length===1?'':'s'} across both accounts.`;
   renderAll(['expenses','surplus','savings','freecash']);
   renderTxnList();
   renderCalendar();
+  renderIncomeList();
+  renderMonthlyBreakdown();
   if (announce !== false){
-    addCoachMessage('coach', `Got it — I re-sorted ${state.transactions.length} transactions into your budget categories and refreshed every number on the dashboard.`);
+    autoReviewAfterParse(state.incomeTransactions.length, state.transactions.length);
   }
 }
 document.getElementById('parseBtn').addEventListener('click', ()=> runParse());
+
+// Auto-triggered by the explicit "Parse & recalculate" click (or a CSV
+// upload, which calls runParse itself) — reviewing an import the household
+// just asked for is the kind of "explicit viewer action" live AI calls
+// should be tied to, never a background loop or timer.
+function autoReviewAfterParse(incomeCount, spendCount){
+  if (!incomeCount && !spendCount){
+    addCoachMessage('coach', "I didn't find any transactions in that import — double check the file and try again.");
+    return;
+  }
+  if (!sampleFn){
+    addCoachMessage('coach', `Got it — I re-sorted ${spendCount} transaction${spendCount===1?'':'s'} into your budget categories${incomeCount?`, and set aside ${incomeCount} deposit${incomeCount===1?'':'s'} for income review`:''}, and refreshed every number on the dashboard.`);
+    return;
+  }
+  const instruction = `I just imported ${spendCount} spending transaction${spendCount===1?'':'s'} and ${incomeCount} income/deposit transaction${incomeCount===1?'':'s'}. Please review them in this order:
+1) Income first — call list_income_transactions and tell me which deposits look like recurring payroll versus one-time income (a bonus, gift, tax refund, etc). If a clear recurring payroll pattern emerges, call set_income with a monthly estimate for the right person, and mark deposits with classify_income_transaction as you go.
+2) Then spending — call list_transactions with filter "uncertain" and recategorize anything you're confident about; ask me about anything genuinely ambiguous rather than guessing.
+Give me one concise summary covering income first, then spending.`;
+  askCoach(instruction);
+}
 
 document.getElementById('txnFilterSeg').addEventListener('click', e=>{
   const btn = e.target.closest('[data-filter]');
@@ -1510,6 +1813,67 @@ function buildCoachTools(){
     }
   },
   {
+    name: 'list_income_transactions',
+    description: 'List deposits/income found in the household\'s imported transactions, so you can tell recurring payroll apart from one-time income (a bonus, gift, tax refund, etc). Pass filter "unreviewed" (default) for ones nobody has classified yet, or "all". Each item includes a looksRecurring guess from its description (e.g. "payroll", "direct dep") — treat that as a hint, not a verdict; the description and amount pattern across dates are the real evidence.',
+    inputSchema: {
+      type: 'object',
+      properties: { filter: { type: 'string', enum: ['unreviewed','all'], description: 'Defaults to "unreviewed".' } }
+    },
+    execute({ filter }){
+      const f = filter === 'all' ? 'all' : 'unreviewed';
+      const matching = state.incomeTransactions.filter(t => f === 'all' || !t.reviewed);
+      const shown = matching.slice(0, 40);
+      return {
+        filter: f, totalMatching: matching.length, shown: shown.length,
+        truncated: matching.length > shown.length,
+        transactions: shown.map(t => ({ transactionId: t.id, owner: t.owner, description: t.desc, amount: Math.round(t.amount*100)/100, date: t.dateISO, looksRecurring: t.looksRecurring, reviewed: t.reviewed }))
+      };
+    }
+  },
+  {
+    name: 'classify_income_transaction',
+    description: 'Mark one income/deposit transaction as recurring payroll or one-time income. Get transactionId values from list_income_transactions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        transactionId: { type: 'string', description: 'A transactionId from list_income_transactions.' },
+        kind: { type: 'string', enum: ['recurring','one_time'] }
+      },
+      required: ['transactionId','kind']
+    },
+    execute({ transactionId, kind }){
+      const t = state.incomeTransactions.find(x => x.id === String(transactionId));
+      if (!t) throw new Error('No income transaction with id "'+transactionId+'". Call list_income_transactions first.');
+      if (kind !== 'recurring' && kind !== 'one_time') throw new Error('kind must be "recurring" or "one_time".');
+      t.reviewed = true;
+      t.recurring = kind === 'recurring';
+      if (typeof renderIncomeList === 'function') renderIncomeList();
+      return { transactionId, description: t.desc, kind };
+    }
+  },
+  {
+    name: 'set_income',
+    description: 'Set one person\'s monthly income and refresh the dashboard. Use once you\'ve identified a clear recurring payroll pattern in list_income_transactions (e.g. two $2,400 deposits a month averages to $4,800/mo) — confirm the figure with the user in your reply rather than silently overwriting an existing value they may have set deliberately.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        who: { type: 'string', enum: ['you','spouse'] },
+        monthlyAmount: { type: 'number', minimum: 0 }
+      },
+      required: ['who','monthlyAmount']
+    },
+    execute({ who, monthlyAmount }){
+      if (who !== 'you' && who !== 'spouse') throw new Error('who must be "you" or "spouse".');
+      const amt = Math.max(0, Number(monthlyAmount) || 0);
+      state.income[who] = amt;
+      const input = document.getElementById(who === 'you' ? 'incomeYou' : 'incomeSpouse');
+      if (input) input.value = amt;
+      renderAll(['income','surplus','savings','freecash']);
+      const d = dashboard();
+      return { who, newMonthlyAmount: Math.round(amt), newIncomeTotal: Math.round(d.incomeTotal), newSurplus: Math.round(d.surplus) };
+    }
+  },
+  {
     name: 'list_transactions',
     description: 'List the household\'s individual parsed transactions so you can review and recategorize them. Pass filter "uncertain" (the default) for transactions currently sitting in the catch-all Miscellaneous category — these are the ones most likely to need a better category. Pass "all" to see everything. Results are capped at 40; if truncated, narrow the request (e.g. by asking the user which account or time period to focus on).',
     inputSchema: {
@@ -1631,6 +1995,7 @@ function buildCoachTools(){
 function buildContextPrompt(d){
   const catLines = categoryKeys().map(k => `- ${categoryMeta(k).label}: ${fmtUSD(state.categories[k]||0)}/mo`).join('\n');
   const uncertainCount = state.transactions.filter(t => t.category === 'Misc').length;
+  const unreviewedIncomeCount = state.incomeTransactions.filter(t => !t.reviewed).length;
   const debtLines = state.debts.length
     ? state.debts.map(x => `- ${x.name}: ${fmtUSD(x.balance)} balance, ${x.apr}% APR, ${fmtUSD(x.minPayment)}/mo minimum`).join('\n')
     : '- none';
@@ -1653,6 +2018,7 @@ ${debtLines}
 - Transaction categories in use: ${categoryKeys().join(', ')}
 - ${uncertainCount} transaction${uncertainCount===1?'':'s'} currently sitting in Miscellaneous (the catch-all bucket) — these are the ones most likely worth reviewing.
 - Recurring bills tracked on the calendar: ${state.bills.length ? state.bills.map(b=>`${b.name} (due day ${b.dueDay})`).join(', ') : 'none yet'}.
+- Income transactions: ${state.incomeTransactions.length} total, ${unreviewedIncomeCount} not yet reviewed for recurring-vs-one-time.
 
 HOW TO RESPOND:
 - Keep replies conversational and concise — normally 2-5 short sentences, longer only if asked for a step-by-step breakdown.
@@ -1811,6 +2177,7 @@ if (window.matchMedia){
 window.__rerenderAfterChartLoad = () => renderAll();
 renderAll();
 renderTxnList();
+renderIncomeList();
 populateBillCategorySelect();
 renderBillList();
 renderCalendar();
