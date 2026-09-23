@@ -178,15 +178,40 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
           <h2 class="font-display font-bold text-sm">Import transactions</h2>
           <span class="text-[.65rem] text-[var(--ink-3)]">sample data loaded</span>
         </div>
-        <p class="text-xs text-[var(--ink-2)]">Paste a CSV or bank export line-per-transaction. We auto-sort each one into Housing, Groceries, Utilities, Subscriptions, Dining or Misc.</p>
-        <div>
-          <span class="field-label">Your account</span>
-          <textarea id="pasteYou" class="textarea mt-1" rows="6"></textarea>
+        <p class="text-xs text-[var(--ink-2)]">Upload a CSV export (Date/Description/Amount, or Debit/Credit columns) or paste transactions directly. We auto-sort each one into Housing, Groceries, Utilities, Subscriptions, Dining or Misc.</p>
+
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="field-label">Your account</span>
+            <span id="fileYouName" class="text-[.68rem] text-[var(--ink-3)] truncate max-w-[140px]"></span>
+          </div>
+          <label for="fileYou" id="dropYou" class="flex items-center justify-center gap-2 text-xs font-semibold text-[var(--accent)] border border-dashed border-[var(--border-strong)] rounded-[10px] py-3 cursor-pointer hover:bg-[var(--accent-soft)] transition-colors">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15V4M12 4L7 9M12 4L17 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Upload CSV or drop it here
+          </label>
+          <input id="fileYou" type="file" accept=".csv,text/csv,text/plain" class="hidden">
+          <details>
+            <summary class="text-[.7rem] text-[var(--ink-3)] cursor-pointer select-none">or paste text</summary>
+            <textarea id="pasteYou" class="textarea mt-1" rows="5"></textarea>
+          </details>
         </div>
-        <div>
-          <span class="field-label">Spouse's account</span>
-          <textarea id="pasteSpouse" class="textarea mt-1" rows="6"></textarea>
+
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="field-label">Spouse's account</span>
+            <span id="fileSpouseName" class="text-[.68rem] text-[var(--ink-3)] truncate max-w-[140px]"></span>
+          </div>
+          <label for="fileSpouse" id="dropSpouse" class="flex items-center justify-center gap-2 text-xs font-semibold text-[var(--accent)] border border-dashed border-[var(--border-strong)] rounded-[10px] py-3 cursor-pointer hover:bg-[var(--accent-soft)] transition-colors">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15V4M12 4L7 9M12 4L17 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Upload CSV or drop it here
+          </label>
+          <input id="fileSpouse" type="file" accept=".csv,text/csv,text/plain" class="hidden">
+          <details>
+            <summary class="text-[.7rem] text-[var(--ink-3)] cursor-pointer select-none">or paste text</summary>
+            <textarea id="pasteSpouse" class="textarea mt-1" rows="5"></textarea>
+          </details>
         </div>
+
         <button id="parseBtn" class="btn btn-primary text-xs w-full py-2">Parse &amp; recalculate</button>
         <p id="parseStatus" class="text-[.7rem] text-[var(--ink-3)]"></p>
       </section>
@@ -401,8 +426,60 @@ function classify(desc){
   for (const [re, cat] of CATEGORY_RULES){ if (re.test(desc)) return cat; }
   return 'Misc';
 }
-function parseLine(line, owner){
-  const raw = line.trim();
+function isIncomeLike(desc){ return /payroll|direct\s?dep|deposit|refund|interest\s?earned|transfer\s?in/i.test(desc); }
+
+// Quote-aware CSV tokenizer: handles "Field, with comma" and "" escaped quotes.
+function parseCSVText(text){
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++){
+    const c = text[i];
+    if (inQuotes){
+      if (c === '"'){
+        if (text[i+1] === '"'){ field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else if (c === '"'){
+      inQuotes = true;
+    } else if (c === ','){
+      row.push(field); field = '';
+    } else if (c === '\n'){
+      row.push(field); rows.push(row); row = []; field = '';
+    } else if (c === '\r'){
+      // skip, \n handles the line break
+    } else {
+      field += c;
+    }
+  }
+  if (field.length || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(c => c.trim() !== ''));
+}
+
+function looksLikeHeaderRow(row){
+  return row.some(c => /^\s*(date|description|payee|memo|merchant|name|amount|debit|credit|withdrawal|deposit|category)\s*$/i.test(c));
+}
+function findColumn(headerNorm, names){
+  for (const n of names){
+    const i = headerNorm.findIndex(h => h === n || h.includes(n));
+    if (i > -1) return i;
+  }
+  return -1;
+}
+function detectColumns(headerRow){
+  const norm = headerRow.map(h => h.trim().toLowerCase());
+  return {
+    date: findColumn(norm, ['date','transaction date','posted date']),
+    desc: findColumn(norm, ['description','payee','merchant','name','memo']),
+    amount: findColumn(norm, ['amount','value']),
+    debit: findColumn(norm, ['debit','withdrawal']),
+    credit: findColumn(norm, ['credit','deposit'])
+  };
+}
+
+// Falls back to "last number in the line is the amount, the rest is the description" —
+// handles free-form paste and any CSV row we couldn't map to known columns.
+function parseFreeformRow(cells, owner){
+  const raw = cells.join(', ').trim();
   if (!raw) return null;
   const matches = raw.match(/-?\(?\$?\s?\d[\d,]*(?:\.\d{1,2})?\)?/g);
   if (!matches || !matches.length) return null;
@@ -410,13 +487,48 @@ function parseLine(line, owner){
   let amount = parseFloat(last.replace(/[\$,()\s]/g,''));
   if (Number.isNaN(amount) || amount === 0) return null;
   const desc = raw.slice(0, raw.lastIndexOf(last)).replace(/^[\s,|-]+|[\s,|-]+$/g,'') || 'Transaction';
+  if (amount > 0 && isIncomeLike(desc)) return null;
   const category = classify(desc);
   if (category === 'Skip') return null;
-  if (amount > 0 && /payroll|deposit|refund|interest\s?earned/i.test(desc)) return null;
   return { owner, desc, amount: Math.abs(amount), category };
 }
+
+function rowsToTransactions(rows, owner){
+  if (!rows.length) return [];
+  let dataRows = rows, cols = null;
+  if (looksLikeHeaderRow(rows[0])){
+    cols = detectColumns(rows[0]);
+    dataRows = rows.slice(1);
+  }
+  const hasAmountCols = cols && (cols.amount > -1 || cols.debit > -1 || cols.credit > -1);
+  const out = [];
+  for (const r of dataRows){
+    if (!hasAmountCols){
+      const t = parseFreeformRow(r, owner);
+      if (t) out.push(t);
+      continue;
+    }
+    let amount;
+    if (cols.amount > -1){
+      amount = parseFloat((r[cols.amount]||'').replace(/[\$,()\s]/g,''));
+    } else {
+      const debit = parseFloat((r[cols.debit]||'').replace(/[\$,()\s]/g,'')) || 0;
+      const credit = parseFloat((r[cols.credit]||'').replace(/[\$,()\s]/g,'')) || 0;
+      amount = debit > 0 ? -Math.abs(debit) : (credit > 0 ? Math.abs(credit) : 0);
+    }
+    if (!amount || Number.isNaN(amount)) continue;
+    const excluded = new Set([cols.date, cols.amount, cols.debit, cols.credit].filter(i => i > -1));
+    const desc = (cols.desc > -1 ? r[cols.desc] : r.filter((_,i)=>!excluded.has(i)).join(' ')).trim() || 'Transaction';
+    if (amount > 0 && isIncomeLike(desc)) continue;
+    const category = classify(desc);
+    if (category === 'Skip') continue;
+    out.push({ owner, desc, amount: Math.abs(amount), category });
+  }
+  return out;
+}
+
 function parseBlock(text, owner){
-  return text.split('\n').map(l => parseLine(l, owner)).filter(Boolean);
+  return rowsToTransactions(parseCSVText(text), owner);
 }
 function deriveCategoriesFromTransactions(){
   const totals = {Housing:0, Utilities:0, Groceries:0, Dining:0, Subscriptions:0, Misc:0};
@@ -799,21 +911,63 @@ document.getElementById('addDebtBtn').addEventListener('click', ()=>{
   renderAll(['debt','interest','freedate']);
 });
 
-document.getElementById('parseBtn').addEventListener('click', ()=>{
+function runParse(announce){
   const you = parseBlock(document.getElementById('pasteYou').value, 'you');
   const spouse = parseBlock(document.getElementById('pasteSpouse').value, 'spouse');
   state.transactions = [...you, ...spouse];
   deriveCategoriesFromTransactions();
   document.getElementById('parseStatus').textContent = `Parsed ${state.transactions.length} transactions across both accounts.`;
   renderAll(['expenses','surplus','savings','freecash']);
-  addCoachMessage('coach', `Got it — I re-sorted ${state.transactions.length} transactions into your budget categories and refreshed every number on the dashboard.`);
-});
+  if (announce !== false){
+    addCoachMessage('coach', `Got it — I re-sorted ${state.transactions.length} transactions into your budget categories and refreshed every number on the dashboard.`);
+  }
+}
+document.getElementById('parseBtn').addEventListener('click', ()=> runParse());
+
+function wireCsvImport(fileInputId, dropZoneId, textareaId, nameLabelId){
+  const fileInput = document.getElementById(fileInputId);
+  const dropZone = document.getElementById(dropZoneId);
+  const textarea = document.getElementById(textareaId);
+  const nameLabel = document.getElementById(nameLabelId);
+
+  function loadFile(file){
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      textarea.value = String(reader.result || '');
+      nameLabel.textContent = file.name;
+      runParse();
+    };
+    reader.onerror = () => {
+      document.getElementById('parseStatus').textContent = `Couldn't read ${file.name} — try pasting the CSV text instead.`;
+    };
+    reader.readAsText(file);
+  }
+
+  fileInput.addEventListener('change', () => loadFile(fileInput.files && fileInput.files[0]));
+  ['dragover','dragenter'].forEach(evt => dropZone.addEventListener(evt, e => {
+    e.preventDefault();
+    dropZone.style.borderColor = 'var(--accent)';
+    dropZone.style.background = 'var(--accent-soft)';
+  }));
+  ['dragleave','drop'].forEach(evt => dropZone.addEventListener(evt, e => {
+    e.preventDefault();
+    dropZone.style.borderColor = '';
+    dropZone.style.background = '';
+  }));
+  dropZone.addEventListener('drop', e => {
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    loadFile(file);
+  });
+}
+wireCsvImport('fileYou', 'dropYou', 'pasteYou', 'fileYouName');
+wireCsvImport('fileSpouse', 'dropSpouse', 'pasteSpouse', 'fileSpouseName');
 
 document.getElementById('pasteYou').value = SAMPLE_YOU;
 document.getElementById('pasteSpouse').value = SAMPLE_SPOUSE;
 state.transactions = [...parseBlock(SAMPLE_YOU,'you'), ...parseBlock(SAMPLE_SPOUSE,'spouse')];
 deriveCategoriesFromTransactions();
-document.getElementById('parseStatus').textContent = `Sample data: ${state.transactions.length} transactions parsed. Replace the text above with your own export and click Parse.`;
+document.getElementById('parseStatus').textContent = `Sample data: ${state.transactions.length} transactions parsed. Upload your own CSV above (or edit the pasted text) and re-parse.`;
 
 // ---------- coach NLU ----------
 const CATEGORY_KEYWORDS = [
