@@ -226,6 +226,27 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
 
       <section class="card p-4 space-y-3">
         <div class="flex items-center justify-between">
+          <h2 class="font-display font-bold text-sm">Review transactions</h2>
+          <span id="txnCountLabel" class="text-[.65rem] text-[var(--ink-3)]"></span>
+        </div>
+        <p class="text-xs text-[var(--ink-2)]">Check the category we guessed for each transaction and fix any that are wrong — or ask your coach to sort through them.</p>
+        <div class="seg w-full" id="txnFilterSeg">
+          <div class="seg-btn flex-1 text-center active" data-filter="uncertain">Needs review</div>
+          <div class="seg-btn flex-1 text-center" data-filter="all">All</div>
+        </div>
+        <div id="txnList" class="space-y-1 max-h-72 overflow-y-auto scrollbar-thin pr-1"></div>
+        <details>
+          <summary class="text-xs font-semibold text-[var(--accent)] cursor-pointer select-none">+ New category</summary>
+          <div class="flex gap-2 mt-2">
+            <input id="newCategoryName" placeholder="e.g. Pet Care" class="input text-xs flex-1" maxlength="40">
+            <button id="addCategoryBtn" class="btn btn-primary text-xs px-3">Add</button>
+          </div>
+          <p id="categoryStatus" class="text-[.68rem] text-[var(--ink-3)] mt-1"></p>
+        </details>
+      </section>
+
+      <section class="card p-4 space-y-3">
+        <div class="flex items-center justify-between">
           <h2 class="font-display font-bold text-sm">Debts</h2>
           <span id="debtCountLabel" class="text-[.65rem] text-[var(--ink-3)]"></span>
         </div>
@@ -359,15 +380,35 @@ const fmtPct = (n) => (n*100).toFixed(0) + '%';
 const clamp0 = (n) => Math.max(0, n);
 const uid = (()=>{let n=1000; return ()=> 'd'+(n++);})();
 
-const CATEGORY_META = {
-  Housing:      {label:'Housing',       slot:'--slot-1'},
-  Utilities:    {label:'Utilities',     slot:'--slot-2'},
-  Groceries:    {label:'Groceries',     slot:'--slot-3'},
-  Dining:       {label:'Dining',        slot:'--slot-4'},
-  Subscriptions:{label:'Subscriptions', slot:'--slot-5'},
-  Misc:         {label:'Miscellaneous', slot:'--slot-7'},
-  'Debt Service':{label:'Debt Service (min)', slot:'--slot-8'}
-};
+// Spend categories are a live, editable list (state.categoryDefs) rather than
+// a fixed set, so the household — or the coach, on their behalf — can add new
+// ones. Slot 8 is reserved for the derived "Debt Service" bucket; the other
+// 7 categorical slots are handed out to categories in creation order, and any
+// category past that (unusual — the palette caps at 8 distinguishable hues)
+// falls back to a neutral gray rather than inventing a 9th hue.
+const SPEND_SLOTS = ['--slot-1','--slot-2','--slot-3','--slot-4','--slot-5','--slot-6','--slot-7'];
+const DEBT_SERVICE_META = { label: 'Debt Service (min)', slot: '--slot-8' };
+function nextAvailableSlot(){
+  const used = new Set(state.categoryDefs.map(c => c.slot));
+  return SPEND_SLOTS.find(s => !used.has(s)) || null;
+}
+function categoryMeta(key){
+  if (key === 'Debt Service') return DEBT_SERVICE_META;
+  const def = state.categoryDefs.find(c => c.key === key);
+  return def ? { label: def.label, slot: def.slot } : { label: key, slot: null };
+}
+function categoryKeys(){ return state.categoryDefs.map(c => c.key); }
+function addCategory(name){
+  const key = String(name || '').trim();
+  if (!key) throw new Error('Category name cannot be empty.');
+  if (key.length > 40) throw new Error('Category name is too long (max 40 characters).');
+  if (state.categoryDefs.some(c => c.key.toLowerCase() === key.toLowerCase())){
+    throw new Error(`A category named "${key}" already exists.`);
+  }
+  state.categoryDefs.push({ key, label: key, slot: nextAvailableSlot() });
+  state.categories[key] = 0;
+  return key;
+}
 
 // Skip rules are checked first (in classify()) so an internal transfer or debt
 // payment is never miscategorized into a spending bucket by an incidental
@@ -388,6 +429,14 @@ const state = {
   income: { you: 4800, spouse: 3100 },
   transactions: [],
   categories: {},
+  categoryDefs: [
+    { key: 'Housing',       label: 'Housing',       slot: '--slot-1' },
+    { key: 'Utilities',     label: 'Utilities',     slot: '--slot-2' },
+    { key: 'Groceries',     label: 'Groceries',     slot: '--slot-3' },
+    { key: 'Dining',        label: 'Dining',        slot: '--slot-4' },
+    { key: 'Subscriptions', label: 'Subscriptions', slot: '--slot-5' },
+    { key: 'Misc',          label: 'Miscellaneous', slot: '--slot-7' }
+  ],
   debts: [
     {id: uid(), name:'Sundance Visa', balance:4200, apr:24.99, minPayment:120},
     {id: uid(), name:'Target RedCard', balance:1150, apr:26.99, minPayment:45},
@@ -522,7 +571,7 @@ function parseFreeformRow(cells, owner){
   if (amount > 0 && isIncomeLike(desc)) return null;
   const category = classify(desc);
   if (category === 'Skip') return null;
-  return { owner, desc, amount: Math.abs(amount), category };
+  return { id: uid(), owner, desc, amount: Math.abs(amount), category };
 }
 
 function rowsToTransactions(rows, owner){
@@ -565,7 +614,7 @@ function rowsToTransactions(rows, owner){
     if (amount > 0 && isIncomeLike(desc)) continue;
     const category = classify(desc);
     if (category === 'Skip') continue;
-    out.push({ owner, desc, amount: Math.abs(amount), category });
+    out.push({ id: uid(), owner, desc, amount: Math.abs(amount), category });
   }
   return out;
 }
@@ -574,8 +623,12 @@ function parseBlock(text, owner){
   return rowsToTransactions(parseCSVText(text), owner);
 }
 function deriveCategoriesFromTransactions(){
-  const totals = {Housing:0, Utilities:0, Groceries:0, Dining:0, Subscriptions:0, Misc:0};
-  for (const t of state.transactions){ totals[t.category] = (totals[t.category]||0) + t.amount; }
+  const totals = {};
+  state.categoryDefs.forEach(c => { totals[c.key] = 0; });
+  for (const t of state.transactions){
+    if (!(t.category in totals)) totals[t.category] = 0;
+    totals[t.category] += t.amount;
+  }
   state.categories = totals;
 }
 
@@ -771,9 +824,43 @@ function renderDebtList(){
 
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+let txnFilter = 'uncertain';
+function renderTxnList(){
+  const wrap = document.getElementById('txnList');
+  if (!wrap) return;
+  const matching = state.transactions.filter(t => txnFilter === 'all' || t.category === 'Misc');
+  document.getElementById('txnCountLabel').textContent = matching.length + (txnFilter === 'uncertain' ? ' need review' : ' shown');
+  if (!matching.length){
+    wrap.innerHTML = `<p class="text-xs text-[var(--ink-3)] py-2">${txnFilter==='uncertain' ? 'Nothing uncategorized — nice.' : 'No transactions yet — import some above.'}</p>`;
+    return;
+  }
+  const keys = categoryKeys();
+  wrap.innerHTML = matching.map(t => `
+    <div class="flex items-center gap-1.5 text-xs py-1.5 border-t hairline first:border-t-0">
+      <span class="flex-1 min-w-0 truncate" title="${escapeHtml(t.desc)}">${escapeHtml(t.desc)}</span>
+      <span class="tnum shrink-0 w-16 text-right text-[var(--ink-2)]">${fmtUSD(t.amount)}</span>
+      <select class="input text-[.68rem] py-1 px-1 shrink-0 w-[104px]" data-txn-select="${t.id}">
+        ${keys.map(k => `<option value="${escapeHtml(k)}" ${k===t.category?'selected':''}>${escapeHtml(categoryMeta(k).label)}</option>`).join('')}
+      </select>
+    </div>`).join('');
+  wrap.querySelectorAll('[data-txn-select]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      const t = state.transactions.find(x=>x.id===sel.dataset.txnSelect);
+      if (!t) return;
+      t.category = sel.value;
+      deriveCategoriesFromTransactions();
+      renderAll(['expenses','surplus','savings','freecash']);
+      renderTxnList();
+    });
+  });
+}
+
 function categoryRows(d){
-  const rows = Object.entries(state.categories).map(([k,v])=>({key:k, label:CATEGORY_META[k].label, slot:CATEGORY_META[k].slot, value:v}));
-  rows.push({key:'Debt Service', label:'Debt Service (min)', slot:CATEGORY_META['Debt Service'].slot, value:d.debtMin});
+  const rows = Object.entries(state.categories).map(([k,v])=>{
+    const meta = categoryMeta(k);
+    return {key:k, label:meta.label, slot:meta.slot, value:v};
+  });
+  rows.push({key:'Debt Service', label:DEBT_SERVICE_META.label, slot:DEBT_SERVICE_META.slot, value:d.debtMin});
   rows.sort((a,b)=>b.value-a.value);
   return rows;
 }
@@ -801,7 +888,7 @@ function renderCatChart(d){
       labels: rows.map(r=>r.label + (leakThresholds[r.key] && r.value/income>leakThresholds[r.key] ? '  *' : '')),
       datasets:[{
         data: rows.map(r=>r.value),
-        backgroundColor: rows.map(r=>cssVar(r.slot)),
+        backgroundColor: rows.map(r=>cssVar(r.slot || '--ink-3')),
         borderRadius: 6,
         barThickness: 18
       }]
@@ -961,11 +1048,36 @@ function runParse(announce){
   deriveCategoriesFromTransactions();
   document.getElementById('parseStatus').textContent = `Parsed ${state.transactions.length} transactions across both accounts.`;
   renderAll(['expenses','surplus','savings','freecash']);
+  renderTxnList();
   if (announce !== false){
     addCoachMessage('coach', `Got it — I re-sorted ${state.transactions.length} transactions into your budget categories and refreshed every number on the dashboard.`);
   }
 }
 document.getElementById('parseBtn').addEventListener('click', ()=> runParse());
+
+document.getElementById('txnFilterSeg').addEventListener('click', e=>{
+  const btn = e.target.closest('[data-filter]');
+  if (!btn) return;
+  txnFilter = btn.dataset.filter;
+  document.querySelectorAll('#txnFilterSeg .seg-btn').forEach(b=> b.classList.toggle('active', b.dataset.filter===txnFilter));
+  renderTxnList();
+});
+
+document.getElementById('addCategoryBtn').addEventListener('click', ()=>{
+  const input = document.getElementById('newCategoryName');
+  const status = document.getElementById('categoryStatus');
+  try {
+    const key = addCategory(input.value);
+    input.value = '';
+    status.textContent = `Added "${key}".`;
+    status.style.color = '';
+    renderAll(['expenses','surplus','savings','freecash']);
+    renderTxnList();
+  } catch (e){
+    status.textContent = e.message || 'Could not add that category.';
+    status.style.color = 'var(--critical)';
+  }
+});
 
 function wireCsvImport(fileInputId, dropZoneId, textareaId, nameLabelId){
   const fileInput = document.getElementById(fileInputId);
@@ -1054,7 +1166,7 @@ function coachRespond(raw){
       renderAll(['expenses','surplus','savings','freecash','interest','freedate']);
       const monthsSaved = before.months - d2.payoff.months;
       const interestSaved = before.totalInterest - d2.payoff.totalInterest;
-      return { text: `Updated. ${CATEGORY_META[cat].label} is now ${fmtUSD(state.categories[cat])}/mo, and I rolled the ${fmtUSD(amount)} straight into your extra debt payment (now ${fmtUSD(state.extraPayment)}/mo). You'll be debt-free by <b>${fmtMonthYear(addMonths(TODAY, d2.payoff.months))}</b> — that's ${monthsSaved} month${monthsSaved===1?'':'s'} sooner and ${fmtUSD(interestSaved)} less interest.` };
+      return { text: `Updated. ${categoryMeta(cat).label} is now ${fmtUSD(state.categories[cat])}/mo, and I rolled the ${fmtUSD(amount)} straight into your extra debt payment (now ${fmtUSD(state.extraPayment)}/mo). You'll be debt-free by <b>${fmtMonthYear(addMonths(TODAY, d2.payoff.months))}</b> — that's ${monthsSaved} month${monthsSaved===1?'':'s'} sooner and ${fmtUSD(interestSaved)} less interest.` };
     }
   }
 
@@ -1119,8 +1231,6 @@ function coachRespond(raw){
 }
 
 // ---------- live AI coach (sample capability, with page tools + graceful fallback) ----------
-const SPEND_CATEGORIES = ['Housing','Utilities','Groceries','Dining','Subscriptions','Misc'];
-
 let sampleFn = null;
 if (typeof window.claude !== 'undefined' && typeof window.claude.use === 'function'){
   window.claude.use('sample').then(fn => { sampleFn = fn; }).catch(()=>{});
@@ -1128,26 +1238,87 @@ if (typeof window.claude !== 'undefined' && typeof window.claude.use === 'functi
 
 const AI_UNAVAILABLE_CODES = new Set(['not_granted','sampling_disabled','not_declared','capability_disabled','capability_removed']);
 
-const COACH_TOOLS = [
+// Built fresh on every call (not a static constant) so each tool's category
+// enum always reflects any categories the coach — or the user — has since added.
+function buildCoachTools(){
+  const catKeys = categoryKeys();
+  return [
   {
     name: 'set_category_spend',
-    description: 'Set one household spending category to a new absolute monthly dollar amount and refresh the dashboard immediately. Use whenever the user states or agrees to a new spending level for a category — compute the resulting absolute amount yourself (e.g. "lowered groceries by $150" means the old amount minus $150).',
+    description: 'Set one household spending category to a new absolute monthly dollar amount and refresh the dashboard immediately. Use whenever the user states or agrees to a new spending level for a category — compute the resulting absolute amount yourself (e.g. "lowered groceries by $150" means the old amount minus $150). The category must already exist — call create_category first if it doesn\'t.',
     inputSchema: {
       type: 'object',
       properties: {
-        category: { type: 'string', enum: SPEND_CATEGORIES, description: 'Which spending category to change.' },
+        category: { type: 'string', enum: catKeys, description: 'Which existing spending category to change.' },
         monthlyAmount: { type: 'number', minimum: 0, description: 'The new absolute monthly dollar amount for that category.' }
       },
       required: ['category', 'monthlyAmount']
     },
     execute({ category, monthlyAmount }){
       category = String(category);
-      if (!SPEND_CATEGORIES.includes(category)) throw new Error('Unknown category "'+category+'". Valid: '+SPEND_CATEGORIES.join(', '));
+      if (!(category in state.categories)) throw new Error('Unknown category "'+category+'". Valid: '+categoryKeys().join(', ')+'. Call create_category first for a new one.');
       const amt = Math.max(0, Number(monthlyAmount) || 0);
       state.categories[category] = amt;
       renderAll(['expenses','surplus','savings','freecash']);
       const d = dashboard();
       return { category, newMonthlyAmount: Math.round(amt), newSurplus: Math.round(d.surplus), newSavingsRate: Math.round(d.savingsRate*1000)/1000, newFreeCash: Math.round(d.freeCash) };
+    }
+  },
+  {
+    name: 'create_category',
+    description: 'Create a new household spending category (e.g. "Pet Care", "Childcare") when none of the existing categories genuinely fit — for a whole new budget line, or before recategorizing a transaction into something new. After creating it, use recategorize_transaction or set_category_spend to put money in it.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string', minLength: 1, maxLength: 40, description: 'The new category\'s name, e.g. "Pet Care".' } },
+      required: ['name']
+    },
+    execute({ name }){
+      const key = addCategory(name);
+      renderAll(['expenses','surplus','savings','freecash']);
+      if (typeof renderTxnList === 'function') renderTxnList();
+      return { category: key, message: `Category "${key}" created.`, existingCategories: categoryKeys() };
+    }
+  },
+  {
+    name: 'list_transactions',
+    description: 'List the household\'s individual parsed transactions so you can review and recategorize them. Pass filter "uncertain" (the default) for transactions currently sitting in the catch-all Miscellaneous category — these are the ones most likely to need a better category. Pass "all" to see everything. Results are capped at 40; if truncated, narrow the request (e.g. by asking the user which account or time period to focus on).',
+    inputSchema: {
+      type: 'object',
+      properties: { filter: { type: 'string', enum: ['uncertain','all'], description: 'Defaults to "uncertain".' } }
+    },
+    execute({ filter }){
+      const f = filter === 'all' ? 'all' : 'uncertain';
+      const matching = state.transactions.filter(t => f === 'all' || t.category === 'Misc');
+      const shown = matching.slice(0, 40);
+      return {
+        filter: f, totalMatching: matching.length, shown: shown.length,
+        truncated: matching.length > shown.length,
+        transactions: shown.map(t => ({ transactionId: t.id, owner: t.owner, description: t.desc, amount: Math.round(t.amount*100)/100, category: t.category }))
+      };
+    }
+  },
+  {
+    name: 'recategorize_transaction',
+    description: 'Move one transaction to a different category and refresh the dashboard. Get transactionId values from list_transactions first. The target category must already exist — call create_category first if it should be a brand-new one. If you are genuinely unsure which category fits a transaction, don\'t guess: describe it to the user and ask, rather than calling this blind.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        transactionId: { type: 'string', description: 'A transactionId from list_transactions.' },
+        category: { type: 'string', enum: catKeys, description: 'The existing category to move it to.' }
+      },
+      required: ['transactionId','category']
+    },
+    execute({ transactionId, category }){
+      const t = state.transactions.find(x => x.id === String(transactionId));
+      if (!t) throw new Error('No transaction with id "'+transactionId+'". Call list_transactions first to get valid ids.');
+      category = String(category);
+      if (!state.categoryDefs.some(c => c.key === category)) throw new Error('Unknown category "'+category+'". Call create_category first if this should be new. Valid: '+categoryKeys().join(', '));
+      const previousCategory = t.category;
+      t.category = category;
+      deriveCategoriesFromTransactions();
+      renderAll(['expenses','surplus','savings','freecash']);
+      if (typeof renderTxnList === 'function') renderTxnList();
+      return { transactionId, description: t.desc, previousCategory, newCategory: category };
     }
   },
   {
@@ -1224,10 +1395,12 @@ const COACH_TOOLS = [
       };
     }
   }
-];
+  ];
+}
 
 function buildContextPrompt(d){
-  const catLines = SPEND_CATEGORIES.map(k => `- ${CATEGORY_META[k].label}: ${fmtUSD(state.categories[k]||0)}/mo`).join('\n');
+  const catLines = categoryKeys().map(k => `- ${categoryMeta(k).label}: ${fmtUSD(state.categories[k]||0)}/mo`).join('\n');
+  const uncertainCount = state.transactions.filter(t => t.category === 'Misc').length;
   const debtLines = state.debts.length
     ? state.debts.map(x => `- ${x.name}: ${fmtUSD(x.balance)} balance, ${x.apr}% APR, ${fmtUSD(x.minPayment)}/mo minimum`).join('\n')
     : '- none';
@@ -1247,12 +1420,15 @@ ${debtLines}
 - Total debt: ${fmtUSD(d.totalDebt)}
 - Current payoff strategy: ${state.strategy}
 - At the current extra payment, debt-free by ${fmtMonthYear(addMonths(TODAY, d.payoff.months))} (${fmtDuration(d.payoff.months)} from now), paying ${fmtUSD(d.payoff.totalInterest)} total interest.
+- Transaction categories in use: ${categoryKeys().join(', ')}
+- ${uncertainCount} transaction${uncertainCount===1?'':'s'} currently sitting in Miscellaneous (the catch-all bucket) — these are the ones most likely worth reviewing.
 
 HOW TO RESPOND:
 - Keep replies conversational and concise — normally 2-5 short sentences, longer only if asked for a step-by-step breakdown.
 - Ground every number in the state above or in a tool result — never estimate math a tool could compute exactly.
 - When the user states or clearly agrees to a concrete change (a new spending level, an extra debt payment amount, a strategy switch), actually CALL the matching tool to apply it — don't just say you will — then explain what changed (new debt-free date, interest saved, etc.).
 - For "what if" or comparison questions, call simulate_scenario or compare_invest_vs_debt for exact figures instead of guessing.
+- If asked to review or clean up transactions, call list_transactions, then recategorize_transaction for the ones you're confident about (a clear merchant match to an existing or sensibly new category). For anything genuinely ambiguous — a cryptic description, a merchant that could fit more than one category, or a purchase type with no good existing category — do NOT guess: describe the transaction(s) in your reply and ask the user which category fits, or whether to create a new one, then act on their answer. Use create_category when no existing category genuinely fits, rather than forcing something into Miscellaneous or a wrong bucket.
 - Plain text with occasional **bold** around key numbers; no markdown headers or bullet lists.
 - Stay in scope: this couple's household budget, spending, saving and debt payoff. Gently redirect anything unrelated.`;
 }
@@ -1324,7 +1500,7 @@ async function askCoach(userText){
       modelTier: 'quick',
       cache: false,
       signal: ctl.signal,
-      tools: COACH_TOOLS,
+      tools: buildCoachTools(),
       onText: (u) => updateCoachStream(entry, u.text)
     });
     updateCoachStream(entry, text);
@@ -1352,6 +1528,7 @@ function updateCoachStream(entry, rawText){
 }
 
 const SUGGESTIONS = [
+  "Review my uncertain transactions and help me put them in the right categories.",
   "We just lowered our grocery bill by $150 — update our numbers and show how much faster we hit our debt-free date.",
   "What are some practical ways to cut utility overhead given our current climate?",
   "If we put an extra $300 a month toward our highest-interest card instead of investing it right now, what's the mathematical difference over 12 months?"
@@ -1400,6 +1577,7 @@ if (window.matchMedia){
 
 // ---------- boot ----------
 renderAll();
+renderTxnList();
 addCoachMessage('coach', `Hi, I'm your live coach. Quick read on your household: ${fmtUSD(dashboard().incomeTotal)}/mo income, ${fmtUSD(dashboard().totalDebt)} in debt, and you're on track to be debt-free by <b>${fmtMonthYear(addMonths(TODAY, dashboard().payoff.months))}</b>. Ask me anything, or try a suggestion below.`);
 
 })();
