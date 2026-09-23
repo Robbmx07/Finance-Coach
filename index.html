@@ -505,22 +505,43 @@ function addCategory(name){
 // always pure noise — so classify() only ever sees real expenses, and only
 // needs one structural Skip rule left (transfers). Everything else below is
 // an actual spending category.
+//
+// Two nuances some exports need that a plain "contains 'transfer'" test
+// gets wrong:
+//  - The source export itself sometimes already flags a row "(Excluded)"
+//    (e.g. a same-household savings shuffle or a loan-refinance wash). That
+//    flag is authoritative noise regardless of what the rest of the text says.
+//  - "Transfer to Loan" is NOT noise — it's a real debt payment leaving the
+//    household's control — so it must never be caught by the generic
+//    transfer-to/from pattern even though it contains "transfer to".
+const GENERIC_TRANSFER_RE = /home\s?banking\s?transfer|internal\s?transfer|\btransfer\s?(to|from)\b|\bzelle\b|\bp2p\b|account\s?transfer|between\s?accounts|\bxfer\b|\bhome\s?banking\b/i;
+const LOAN_TRANSFER_RE = /transfer.*\bloan\b|\bloan\b.*transfer/i;
 function isInternalTransfer(desc){
-  return /home\s?banking\s?transfer|internal\s?transfer|\btransfer\s?(to|from)\b|\bzelle\b|\bp2p\b|account\s?transfer|between\s?accounts|\bxfer\b/i.test(desc);
+  const d = String(desc || '');
+  if (/^\s*\(excluded\)/i.test(d)) return true;
+  if (LOAN_TRANSFER_RE.test(d)) return false;
+  return GENERIC_TRANSFER_RE.test(d);
 }
 
 const CATEGORY_RULES = [
-  [/home\s?banking\s?transfer|internal\s?transfer|\btransfer\s?(to|from)\b|\bzelle\b|\bp2p\b|account\s?transfer|between\s?accounts|\bxfer\b/i, 'Skip'],
+  [{ test: isInternalTransfer }, 'Skip'],
+  // Debt-payment keywords are checked early and specifically, ahead of the
+  // broader Utilities/Home rules below — bank exports often pad a debt-payment
+  // row's memo with banking-channel boilerplate like "Internet Access" (the
+  // online-banking channel, not an ISP bill), which would otherwise get
+  // mis-caught by the Utilities rule's "internet" keyword.
+  [/autopay|card\s?payment|credit\s?card|credit\s?crd|loan\s?pymt|loan\s?payment|to\s+loan\b|thank\s?you.*payment|payment.*thank\s?you|capital\s?one\s?pymt|discover\s?pymt|barclays|bill\s?paymt/i, 'Credit/Debt Payment'],
+  [/farmers\s?ins|\bgeico\b|progressive\s?ins|allstate|state\s?farm|\binsurance\b/i, 'Insurance'],
+  [/odd\s?house\s?party\s?supply|\bliquor\b|\bbrewery\b|\bwine\s?shop\b|\bpub\b/i, 'Alcohol & Bars'],
   [/rent|mortgage|apartment|property\s?mgmt|landlord/i, 'Home/Mortgage'],
   [/home\s?depot|lowe'?s|menards|ace\s?hardware|hardware\s?store|tractor\s?supply/i, 'Home Improvement'],
   [/amazon|wayfair|\bikea\b|bed\s?bath|homegoods|home\s?goods|pottery\s?barn/i, 'Home Goods'],
   [/kroger|whole\s?foods|trader\s?joe|safeway|aldi|wal[\s-]?mart|publix|grocery|market\s?basket|harris\s?teeter/i, 'Groceries'],
   [/shell\b|speedway|chevron|exxon|mobil\b|\bbp\b|marathon|circle\s?k|sunoco|gas\s?station|fuel/i, 'Fuel'],
-  [/\bcvs\b|walgreens|pharmacy|urgent\s?care|\bclinic\b|\bdentist\b|\bhospital\b|\bdoctor\b|medical/i, 'Pharmacy/Medical'],
+  [/\bcvs\b|walgreens|pharmacy|urgent\s?care|\bclinic\b|\bdentist\b|\bhospital\b|\bdoctor\b|medical|carelonrx/i, 'Pharmacy/Medical'],
   [/electric|power\s?co|water\s?dept|water\s?utility|\binternet\b|xfinity|comcast|spectrum|at&t|verizon|natural\s?gas|utility|utilities|\baes\s?ohio\b|duke\s?energy|dominion|con\s?edison|national\s?grid|ez\s?pay/i, 'Utilities'],
-  [/netflix|spotify|hulu|disney\+|hbo|apple\.com\/bill|youtube\s?premium|steam|playstation|xbox|gaming|dispensary|cannabis|zen\s?leaf|gym|planet\s?fitness|prime\s?video|audible|icloud/i, 'Entertainment'],
-  [/doordash|uber\s?eats|grubhub|starbucks|chipotle|restaurant|cafe|pizza|taco|bar\s?tab|takeout|mcdonald/i, 'Dining'],
-  [/autopay|card\s?payment|credit\s?card|credit\s?crd|loan\s?pymt|loan\s?payment|to\s+loan\b|thank\s?you.*payment|payment.*thank\s?you|capital\s?one\s?pymt|discover\s?pymt/i, 'Credit/Debt Payment']
+  [/netflix|spotify|hulu|disney\+|hbo|apple\.com\/bill|youtube\s?premium|steam|playstation|xbox|gaming|dispensary|cannabis|zen\s?leaf|gym|planet\s?fitness|prime\s?video|audible|icloud|draftkings|betting|sportsbook/i, 'Entertainment'],
+  [/doordash|uber\s?eats|grubhub|starbucks|chipotle|restaurant|cafe|pizza|taco|bar\s?tab|takeout|mcdonald/i, 'Dining']
 ];
 
 const state = {
@@ -539,6 +560,8 @@ const state = {
     { key: 'Home Improvement',    label: 'Home Improvement',    slot: null },
     { key: 'Home Goods',          label: 'Home Goods',          slot: null },
     { key: 'Pharmacy/Medical',    label: 'Pharmacy/Medical',    slot: null },
+    { key: 'Insurance',           label: 'Insurance',           slot: null },
+    { key: 'Alcohol & Bars',      label: 'Alcohol & Bars',      slot: null },
     { key: 'Misc',                label: 'Miscellaneous',       slot: null }
   ],
   debts: [],
@@ -623,9 +646,17 @@ function findHeaderRowIndex(rows){
   }
   return -1;
 }
+// Exact header matches win over substring ones, and are checked across every
+// candidate name before any substring fallback runs — otherwise a name like
+// "category" can accidentally match a "Parent Category" column that merely
+// contains it, when "Category" is itself present elsewhere in the header row.
 function findColumn(headerNorm, names){
   for (const n of names){
-    const i = headerNorm.findIndex(h => h === n || h.includes(n));
+    const i = headerNorm.indexOf(n);
+    if (i > -1) return i;
+  }
+  for (const n of names){
+    const i = headerNorm.findIndex(h => h.includes(n));
     if (i > -1) return i;
   }
   return -1;
@@ -672,7 +703,37 @@ function detectColumns(headerRow, sampleRows){
   const type = (amount > -1 && debit === -1 && credit === -1 && sampleRows)
     ? detectTypeColumnIndex(headerRow, sampleRows, new Set([date, desc, memo, amount].filter(i => i > -1)))
     : -1;
-  return { date, desc, memo, amount, debit, credit, type };
+  // Exact-match only (never substring) — these are just hints used to reduce
+  // Misc pileup for merchants our own keyword rules don't recognize, so a
+  // false match (e.g. matching "Parent Category" when we wanted "Category")
+  // would be worse than not finding the column at all.
+  const categoryCol = norm.indexOf('category');
+  const parentCategoryCol = norm.indexOf('parent category');
+  return { date, desc, memo, amount, debit, credit, type, categoryCol, parentCategoryCol };
+}
+
+// Some exports carry their own category taxonomy (e.g. a Mint-style "Category"
+// / "Parent Category" pair). When our own merchant-keyword rules come up
+// empty (classify() returns 'Misc'), this translates the export's own hint
+// into our taxonomy instead of leaving the transaction in Misc — the export's
+// wording varies a lot, so this matches loosely and only fires as a fallback,
+// never overriding a real keyword match.
+function mapCsvCategoryHint(categoryCell, parentCell){
+  const hint = `${categoryCell || ''} ${parentCell || ''}`.toLowerCase();
+  if (!hint.trim()) return null;
+  if (/alcohol|\bbars?\b/.test(hint)) return 'Alcohol & Bars';
+  if (/grocer/.test(hint)) return 'Groceries';
+  if (/fast food|restaurant|dining/.test(hint)) return 'Dining';
+  if (/home improvement/.test(hint)) return 'Home Improvement';
+  if (/hobb|electronics|software|entertainment|marijuana|personal care/.test(hint)) return 'Entertainment';
+  if (/shopping/.test(hint)) return 'Home Goods';
+  if (/utilit|\binternet\b/.test(hint)) return 'Utilities';
+  if (/medication|pharmacy/.test(hint)) return 'Pharmacy/Medical';
+  if (/insurance/.test(hint)) return 'Insurance';
+  if (/mortgage|\brent\b/.test(hint)) return 'Home/Mortgage';
+  if (/\bfuel\b|gas station/.test(hint)) return 'Fuel';
+  if (/credit card/.test(hint)) return 'Credit/Debt Payment';
+  return null;
 }
 
 // Falls back to "last number in the line is the amount, the rest is the description" —
@@ -739,7 +800,7 @@ function rowsToTransactions(rows, owner){
       }
     }
     if (!amount) continue;
-    const excluded = new Set([cols.date, cols.amount, cols.debit, cols.credit, cols.memo, cols.type].filter(i => i > -1));
+    const excluded = new Set([cols.date, cols.amount, cols.debit, cols.credit, cols.memo, cols.type, cols.categoryCol, cols.parentCategoryCol].filter(i => i > -1));
     const descCell = cols.desc > -1 ? (r[cols.desc]||'').trim() : '';
     const memoCell = cols.memo > -1 ? (r[cols.memo]||'').trim() : '';
     let desc = [descCell, memoCell].filter(Boolean).join(' — ');
@@ -753,8 +814,15 @@ function rowsToTransactions(rows, owner){
       incomeTransactions.push({ kind: 'income', id: uid(), owner, desc, amount: Math.abs(amount), dateISO, looksRecurring: isIncomeLike(desc), reviewed: false });
       continue;
     }
-    const category = classify(desc);
+    let category = classify(desc);
     if (category === 'Skip') continue;
+    if (category === 'Misc' && (cols.categoryCol > -1 || cols.parentCategoryCol > -1)){
+      const hint = mapCsvCategoryHint(
+        cols.categoryCol > -1 ? r[cols.categoryCol] : '',
+        cols.parentCategoryCol > -1 ? r[cols.parentCategoryCol] : ''
+      );
+      if (hint) category = hint;
+    }
     transactions.push({ kind: 'spend', id: uid(), owner, desc, amount: Math.abs(amount), category, dateISO });
   }
   return { transactions, incomeTransactions };
