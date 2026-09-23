@@ -108,6 +108,14 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
 .apply-btn{font-size:.75rem;font-weight:700;background:var(--good);color:#fff;border-radius:8px;padding:.3rem .6rem;cursor:pointer;display:inline-flex;align-items:center;gap:.3rem;margin-top:.4rem;}
 .apply-btn:hover{filter:brightness(1.08);}
 .coach-dot{width:8px;height:8px;border-radius:999px;background:var(--good);box-shadow:0 0 0 3px var(--good-soft);}
+.coach-dot.offline{background:var(--ink-3);box-shadow:0 0 0 3px var(--surface-3);}
+.thinking-dots{display:inline-flex;gap:3px;align-items:center;padding:.2rem 0;}
+.thinking-dots span{width:5px;height:5px;border-radius:999px;background:var(--ink-3);animation:thinking-pulse 1.1s ease-in-out infinite;}
+.thinking-dots span:nth-child(2){animation-delay:.15s;}
+.thinking-dots span:nth-child(3){animation-delay:.3s;}
+@keyframes thinking-pulse{0%,80%,100%{opacity:.25;transform:scale(.85);}40%{opacity:1;transform:scale(1);}}
+@media (prefers-reduced-motion: reduce){.thinking-dots span{animation:none;opacity:.6;}}
+.btn-send[data-busy="true"]{background:var(--critical);}
 
 .rec-row{border:1px solid var(--border);border-radius:12px;padding:.65rem .8rem;background:var(--surface);}
 .rec-row.done{opacity:.55;}
@@ -321,10 +329,10 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
   <div class="chat-shell h-full flex flex-col overflow-hidden">
     <div class="flex items-center justify-between px-4 py-3 border-b hairline">
       <div class="flex items-center gap-2">
-        <span class="coach-dot"></span>
+        <span class="coach-dot" data-role="status-dot"></span>
         <div>
           <p class="font-display font-bold text-sm leading-none">Live Financial Coach</p>
-          <p class="text-[.68rem] text-[var(--ink-3)] mt-0.5">Reads your dashboard in real time</p>
+          <p class="text-[.68rem] text-[var(--ink-3)] mt-0.5" data-role="status-text">Live AI, grounded in your dashboard</p>
         </div>
       </div>
       <button class="coach-close lg:hidden btn-ghost btn text-xs px-2 py-1">Close</button>
@@ -333,8 +341,9 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
     <div class="px-3 pt-2 flex gap-2 overflow-x-auto scrollbar-thin" data-role="chips"></div>
     <form class="px-3 py-3 flex gap-2 border-t hairline" data-role="form">
       <input data-role="input" class="input flex-1" placeholder="Ask your coach anything…" autocomplete="off">
-      <button type="submit" class="btn btn-primary px-3 py-2 flex items-center justify-center" aria-label="Send">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 12L20 4L14 20L11 13L4 12Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      <button type="submit" class="btn btn-primary btn-send px-3 py-2 flex items-center justify-center" data-role="send-btn" aria-label="Send">
+        <svg data-role="icon-send" width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 12L20 4L14 20L11 13L4 12Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <svg data-role="icon-stop" width="14" height="14" viewBox="0 0 24 24" fill="none" hidden><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor"/></svg>
       </button>
     </form>
   </div>
@@ -1109,17 +1118,237 @@ function coachRespond(raw){
   return { text: `Right now you're carrying ${fmtUSD(d.totalDebt)} in debt at a ${fmtPct(d.savingsRate)} savings rate, on pace to be debt-free by ${fmtMonthYear(addMonths(TODAY, d.payoff.months))}. Ask me about a specific category, "avalanche vs snowball", or try something like "we lowered groceries by $100 — how much faster is our debt-free date?"` };
 }
 
+// ---------- live AI coach (sample capability, with page tools + graceful fallback) ----------
+const SPEND_CATEGORIES = ['Housing','Utilities','Groceries','Dining','Subscriptions','Misc'];
+
+let sampleFn = null;
+if (typeof window.claude !== 'undefined' && typeof window.claude.use === 'function'){
+  window.claude.use('sample').then(fn => { sampleFn = fn; }).catch(()=>{});
+}
+
+const AI_UNAVAILABLE_CODES = new Set(['not_granted','sampling_disabled','not_declared','capability_disabled','capability_removed']);
+
+const COACH_TOOLS = [
+  {
+    name: 'set_category_spend',
+    description: 'Set one household spending category to a new absolute monthly dollar amount and refresh the dashboard immediately. Use whenever the user states or agrees to a new spending level for a category — compute the resulting absolute amount yourself (e.g. "lowered groceries by $150" means the old amount minus $150).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', enum: SPEND_CATEGORIES, description: 'Which spending category to change.' },
+        monthlyAmount: { type: 'number', minimum: 0, description: 'The new absolute monthly dollar amount for that category.' }
+      },
+      required: ['category', 'monthlyAmount']
+    },
+    execute({ category, monthlyAmount }){
+      category = String(category);
+      if (!SPEND_CATEGORIES.includes(category)) throw new Error('Unknown category "'+category+'". Valid: '+SPEND_CATEGORIES.join(', '));
+      const amt = Math.max(0, Number(monthlyAmount) || 0);
+      state.categories[category] = amt;
+      renderAll(['expenses','surplus','savings','freecash']);
+      const d = dashboard();
+      return { category, newMonthlyAmount: Math.round(amt), newSurplus: Math.round(d.surplus), newSavingsRate: Math.round(d.savingsRate*1000)/1000, newFreeCash: Math.round(d.freeCash) };
+    }
+  },
+  {
+    name: 'set_extra_debt_payment',
+    description: "Set the household's extra monthly payment toward debt, beyond required minimums, and refresh the payoff timeline. Use when the user agrees to put a specific extra amount toward debt.",
+    inputSchema: {
+      type: 'object',
+      properties: { monthlyAmount: { type: 'number', minimum: 0, description: 'New extra monthly dollar amount toward debt, beyond minimums.' } },
+      required: ['monthlyAmount']
+    },
+    execute({ monthlyAmount }){
+      const amt = Math.max(0, Number(monthlyAmount) || 0);
+      state.extraPayment = amt;
+      renderAll(['surplus','freecash','interest','freedate']);
+      const d = dashboard();
+      return { newExtraPayment: Math.round(amt), debtFreeDate: fmtMonthYear(addMonths(TODAY, d.payoff.months)), monthsToDebtFree: d.payoff.months, totalInterest: Math.round(d.payoff.totalInterest) };
+    }
+  },
+  {
+    name: 'set_strategy',
+    description: 'Switch the payoff strategy between avalanche (highest APR balance first — usually least total interest) and snowball (smallest balance first — faster early wins), and refresh projections.',
+    inputSchema: { type: 'object', properties: { strategy: { type: 'string', enum: ['avalanche','snowball'] } }, required: ['strategy'] },
+    execute({ strategy }){
+      strategy = String(strategy);
+      if (strategy !== 'avalanche' && strategy !== 'snowball') throw new Error('strategy must be "avalanche" or "snowball"');
+      state.strategy = strategy;
+      renderAll(['interest','freedate']);
+      const d = dashboard();
+      return { strategy, monthsToDebtFree: d.payoff.months, totalInterest: Math.round(d.payoff.totalInterest), debtFreeDate: fmtMonthYear(addMonths(TODAY, d.payoff.months)) };
+    }
+  },
+  {
+    name: 'simulate_scenario',
+    description: 'Compute an exact hypothetical debt payoff projection WITHOUT changing anything on the dashboard, for a given strategy and extra monthly payment. Use for "what if" questions instead of estimating the math.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        strategy: { type: 'string', enum: ['avalanche','snowball'] },
+        extraMonthly: { type: 'number', minimum: 0, description: 'Hypothetical extra monthly payment toward debt, beyond minimums.' }
+      },
+      required: ['strategy','extraMonthly']
+    },
+    execute({ strategy, extraMonthly }){
+      strategy = String(strategy) === 'snowball' ? 'snowball' : 'avalanche';
+      const amt = Math.max(0, Number(extraMonthly) || 0);
+      const res = simulatePayoff(state.debts, strategy, amt);
+      return { strategy, extraMonthly: Math.round(amt), monthsToDebtFree: res.months, totalInterest: Math.round(res.totalInterest), debtFreeDate: fmtMonthYear(addMonths(TODAY, res.months)) };
+    }
+  },
+  {
+    name: 'compare_invest_vs_debt',
+    description: 'Precisely compare putting an extra monthly amount toward debt (avalanche, on top of the current extra payment) versus investing it instead, over a number of months. Returns exact interest saved and months-sooner from paying down debt, plus the investment\'s future value at an assumed annual return. Use instead of estimating for "pay debt vs invest" questions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        monthlyAmount: { type: 'number', minimum: 0 },
+        months: { type: 'number', minimum: 1, maximum: 360, description: 'Comparison horizon in months. Defaults to 12.' },
+        annualReturnRate: { type: 'number', minimum: 0, maximum: 0.3, description: 'Assumed annual investment return as a decimal, e.g. 0.07 for 7%. Defaults to 0.07.' }
+      },
+      required: ['monthlyAmount']
+    },
+    execute({ monthlyAmount, months, annualReturnRate }){
+      const amt = Math.max(0, Number(monthlyAmount) || 0);
+      const n = Math.max(1, Math.round(Number(months) || 12));
+      const rate = (annualReturnRate == null || Number.isNaN(Number(annualReturnRate))) ? state.investReturnRate : Math.max(0, Number(annualReturnRate));
+      const d = dashboard();
+      const baseline = simulatePayoff(state.debts, 'avalanche', d.extra);
+      const withExtra = simulatePayoff(state.debts, 'avalanche', d.extra + amt);
+      const topApr = state.debts.length ? Math.max(...state.debts.map(dd=>dd.apr)) : 0;
+      return {
+        monthlyAmount: Math.round(amt), months: n, assumedAnnualReturnPct: Math.round(rate*1000)/10,
+        payDebtFirst: { interestSaved: Math.round(baseline.totalInterest - withExtra.totalInterest), monthsSooner: baseline.months - withExtra.months, topDebtAprPct: topApr, newDebtFreeDate: fmtMonthYear(addMonths(TODAY, withExtra.months)) },
+        investInstead: { futureValueAfterPeriod: Math.round(investFV(amt, rate, n)), totalContributed: Math.round(amt*n) }
+      };
+    }
+  }
+];
+
+function buildContextPrompt(d){
+  const catLines = SPEND_CATEGORIES.map(k => `- ${CATEGORY_META[k].label}: ${fmtUSD(state.categories[k]||0)}/mo`).join('\n');
+  const debtLines = state.debts.length
+    ? state.debts.map(x => `- ${x.name}: ${fmtUSD(x.balance)} balance, ${x.apr}% APR, ${fmtUSD(x.minPayment)}/mo minimum`).join('\n')
+    : '- none';
+  return `You are the Live Financial Coach embedded in "Debt-Free Runway," a household budgeting dashboard for a two-income couple. Give warm, direct, numerically rigorous coaching grounded in their real numbers below — never generic personal-finance platitudes.
+
+CURRENT HOUSEHOLD STATE (monthly figures unless noted):
+- Combined income: ${fmtUSD(d.incomeTotal)}
+- Spending by category:
+${catLines}
+- Minimum debt payments: ${fmtUSD(d.debtMin)}
+- Cash flow surplus before extra debt payment: ${fmtUSD(d.surplus)}
+- Extra payment currently going to debt: ${fmtUSD(d.extra)}
+- Free cash after that: ${fmtUSD(d.freeCash)}
+- Savings rate: ${fmtPct(d.savingsRate)}
+- Debts:
+${debtLines}
+- Total debt: ${fmtUSD(d.totalDebt)}
+- Current payoff strategy: ${state.strategy}
+- At the current extra payment, debt-free by ${fmtMonthYear(addMonths(TODAY, d.payoff.months))} (${fmtDuration(d.payoff.months)} from now), paying ${fmtUSD(d.payoff.totalInterest)} total interest.
+
+HOW TO RESPOND:
+- Keep replies conversational and concise — normally 2-5 short sentences, longer only if asked for a step-by-step breakdown.
+- Ground every number in the state above or in a tool result — never estimate math a tool could compute exactly.
+- When the user states or clearly agrees to a concrete change (a new spending level, an extra debt payment amount, a strategy switch), actually CALL the matching tool to apply it — don't just say you will — then explain what changed (new debt-free date, interest saved, etc.).
+- For "what if" or comparison questions, call simulate_scenario or compare_invest_vs_debt for exact figures instead of guessing.
+- Plain text with occasional **bold** around key numbers; no markdown headers or bullet lists.
+- Stay in scope: this couple's household budget, spending, saving and debt payoff. Gently redirect anything unrelated.`;
+}
+
 // ---------- chat UI (mounted in desktop column + mobile drawer) ----------
 const chatHistory = [];
+let chatTurns = [];
+let activeAbort = null;
+
 function addCoachMessage(role, text){
   chatHistory.push({role, text, ts: Date.now()});
   renderChatMessages();
+}
+function setEntryHtml(entry, html){
+  entry.text = html;
+  renderChatMessages();
+}
+function formatCoachText(raw){
+  let s = escapeHtml(String(raw ?? ''));
+  s = s.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  s = s.replace(/\n{2,}/g, '<br><br>').replace(/\n/g, '<br>');
+  return s;
+}
+function beginCoachStream(){
+  const entry = { role: 'coach', text: '<span class="thinking-dots"><span></span><span></span><span></span></span>', ts: Date.now() };
+  chatHistory.push(entry);
+  renderChatMessages();
+  return entry;
 }
 function renderChatMessages(){
   document.querySelectorAll('[data-role="messages"]').forEach(container=>{
     container.innerHTML = chatHistory.map(m=>`<div class="bubble ${m.role==='user'?'bubble-user':'bubble-coach'}">${m.text}</div>`).join('');
     container.scrollTop = container.scrollHeight;
   });
+}
+function setBusy(busy){
+  document.querySelectorAll('[data-role="send-btn"]').forEach(btn=>{
+    btn.dataset.busy = busy ? 'true' : 'false';
+    btn.querySelector('[data-role="icon-send"]').hidden = busy;
+    btn.querySelector('[data-role="icon-stop"]').hidden = !busy;
+    btn.setAttribute('aria-label', busy ? 'Stop' : 'Send');
+  });
+  document.querySelectorAll('[data-role="input"]').forEach(inp=>{ inp.disabled = busy; });
+}
+function setAiStatus(online){
+  document.querySelectorAll('[data-role="status-dot"]').forEach(el=> el.classList.toggle('offline', !online));
+  document.querySelectorAll('[data-role="status-text"]').forEach(el=> el.textContent = online ? 'Live AI, grounded in your dashboard' : 'Built-in coach (AI unavailable here)');
+}
+
+async function askCoach(userText){
+  setBusy(true);
+  const entry = beginCoachStream();
+  try {
+    if (!sampleFn){
+      await new Promise(r => setTimeout(r, 250));
+      const res = coachRespond(userText);
+      setEntryHtml(entry, res.text);
+      return;
+    }
+    const ctl = new AbortController();
+    activeAbort = ctl;
+    const d = dashboard();
+    const turns = [
+      { role: 'user', content: buildContextPrompt(d) },
+      ...chatTurns.slice(-8),
+      { role: 'user', content: userText }
+    ];
+    const { text } = await sampleFn(turns, {
+      modelTier: 'quick',
+      cache: false,
+      signal: ctl.signal,
+      tools: COACH_TOOLS,
+      onText: (u) => updateCoachStream(entry, u.text)
+    });
+    updateCoachStream(entry, text);
+    chatTurns.push({ role: 'user', content: userText }, { role: 'assistant', content: text });
+    if (chatTurns.length > 16) chatTurns = chatTurns.slice(-16);
+  } catch (e){
+    if (e && e.code === 'cancelled'){
+      setEntryHtml(entry, formatCoachText(e.text && e.text.trim() ? e.text : '(stopped)'));
+    } else if (e && AI_UNAVAILABLE_CODES.has(e.code)){
+      sampleFn = null;
+      setAiStatus(false);
+      const res = coachRespond(userText);
+      setEntryHtml(entry, formatCoachText("Live AI coaching isn't available in this view, so I'm switching to my built-in playbook.") + '<br><br>' + res.text);
+    } else {
+      const res = coachRespond(userText);
+      setEntryHtml(entry, formatCoachText('Live AI hiccuped just now — here is my best answer:') + '<br><br>' + res.text);
+    }
+  } finally {
+    activeAbort = null;
+    setBusy(false);
+  }
+}
+function updateCoachStream(entry, rawText){
+  setEntryHtml(entry, formatCoachText(rawText));
 }
 
 const SUGGESTIONS = [
@@ -1141,6 +1370,7 @@ function mountCoach(container){
   const input = container.querySelector('[data-role="input"]');
   form.addEventListener('submit', e=>{
     e.preventDefault();
+    if (input.disabled){ activeAbort?.abort(); return; }
     const val = input.value.trim();
     if (!val) return;
     input.value = '';
@@ -1152,10 +1382,7 @@ function mountCoach(container){
 
 function handleUserMessage(text){
   addCoachMessage('user', escapeHtml(text));
-  setTimeout(()=>{
-    const res = coachRespond(text);
-    addCoachMessage('coach', res.text);
-  }, 220);
+  askCoach(text);
 }
 
 mountCoach(document.getElementById('coachDesktopWrap'));
