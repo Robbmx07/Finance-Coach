@@ -247,6 +247,15 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
 
       <section class="card p-4 space-y-3">
         <div class="flex items-center justify-between">
+          <h2 class="font-display font-bold text-sm">Review transfers</h2>
+          <span id="transferCountLabel" class="text-[.65rem] text-[var(--ink-3)]"></span>
+        </div>
+        <p class="text-xs text-[var(--ink-2)]">Money that looked like it moved between your own accounts — a Zelle, a "Home Banking" transfer, a share-to-share move. None of it touches your budget until you say what it actually was: a real category (e.g. you moved money to pay a bill), income, or a pure transfer to ignore.</p>
+        <div id="transferList" class="space-y-1 max-h-72 overflow-y-auto scrollbar-thin pr-1"></div>
+      </section>
+
+      <section class="card p-4 space-y-3">
+        <div class="flex items-center justify-between">
           <h2 class="font-display font-bold text-sm">Review transactions</h2>
           <span id="txnCountLabel" class="text-[.65rem] text-[var(--ink-3)]"></span>
         </div>
@@ -548,6 +557,7 @@ const state = {
   income: { you: 0, spouse: 0 },
   transactions: [],
   incomeTransactions: [],
+  transferTransactions: [],
   categories: {},
   categoryDefs: [
     { key: 'Home/Mortgage',       label: 'Home/Mortgage',       slot: '--slot-1' },
@@ -738,10 +748,12 @@ function mapCsvCategoryHint(categoryCell, parentCell){
 
 // Falls back to "last number in the line is the amount, the rest is the description" —
 // handles free-form paste and any CSV row we couldn't map to known columns.
-// A row becomes one of three things: pure noise (an internal transfer —
-// discarded outright), an income candidate (any positive amount — never
-// silently dropped, always handed to income review since only the coach or
-// the household can tell recurring payroll from a one-time deposit), or a
+// A row becomes one of three things: an internal transfer (money moving
+// between the household's own accounts — never silently discarded, always
+// handed to transfer review, since only a human can say what it was really
+// for), an income candidate (any other positive amount — never silently
+// dropped, always handed to income review since only the coach or the
+// household can tell recurring payroll from a one-time deposit), or a
 // classified expense (a negative amount, sorted into a spending category).
 function parseFreeformRow(cells, owner){
   const raw = cells.join(', ').trim();
@@ -752,9 +764,11 @@ function parseFreeformRow(cells, owner){
   let amount = parseFloat(last.replace(/[\$,()\s]/g,''));
   if (Number.isNaN(amount) || amount === 0) return null;
   const desc = raw.slice(0, raw.lastIndexOf(last)).replace(/^[\s,|-]+|[\s,|-]+$/g,'') || 'Transaction';
-  if (isInternalTransfer(desc)) return null;
   const dateMatch = raw.match(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b/);
   const dateISO = dateMatch ? parseDateLoose(dateMatch[0]) : null;
+  if (isInternalTransfer(desc)){
+    return { kind: 'transfer', id: uid(), owner, desc, amount: Math.abs(amount), direction: amount > 0 ? 'in' : 'out', dateISO };
+  }
   if (amount > 0){
     return { kind: 'income', id: uid(), owner, desc, amount: Math.abs(amount), dateISO, looksRecurring: isIncomeLike(desc), reviewed: false };
   }
@@ -764,7 +778,7 @@ function parseFreeformRow(cells, owner){
 }
 
 function rowsToTransactions(rows, owner){
-  if (!rows.length) return { transactions: [], incomeTransactions: [] };
+  if (!rows.length) return { transactions: [], incomeTransactions: [], transferTransactions: [] };
   const headerIdx = findHeaderRowIndex(rows);
   let dataRows = rows, cols = null;
   if (headerIdx > -1){
@@ -772,8 +786,8 @@ function rowsToTransactions(rows, owner){
     cols = detectColumns(rows[headerIdx], dataRows.slice(0, 15));
   }
   const hasAmountCols = cols && (cols.amount > -1 || cols.debit > -1 || cols.credit > -1);
-  const transactions = [], incomeTransactions = [];
-  const pushResult = (t) => { if (!t) return; if (t.kind === 'income') incomeTransactions.push(t); else transactions.push(t); };
+  const transactions = [], incomeTransactions = [], transferTransactions = [];
+  const pushResult = (t) => { if (!t) return; if (t.kind === 'income') incomeTransactions.push(t); else if (t.kind === 'transfer') transferTransactions.push(t); else transactions.push(t); };
   for (const r of dataRows){
     if (!hasAmountCols){
       pushResult(parseFreeformRow(r, owner));
@@ -808,8 +822,11 @@ function rowsToTransactions(rows, owner){
       desc = r.filter((_,i) => !excluded.has(i)).join(' ').trim();
     }
     desc = desc || 'Transaction';
-    if (isInternalTransfer(desc)) continue;
     const dateISO = cols.date > -1 ? parseDateLoose(r[cols.date]) : null;
+    if (isInternalTransfer(desc)){
+      transferTransactions.push({ kind: 'transfer', id: uid(), owner, desc, amount: Math.abs(amount), direction: amount > 0 ? 'in' : 'out', dateISO });
+      continue;
+    }
     if (amount > 0){
       incomeTransactions.push({ kind: 'income', id: uid(), owner, desc, amount: Math.abs(amount), dateISO, looksRecurring: isIncomeLike(desc), reviewed: false });
       continue;
@@ -825,7 +842,7 @@ function rowsToTransactions(rows, owner){
     }
     transactions.push({ kind: 'spend', id: uid(), owner, desc, amount: Math.abs(amount), category, dateISO });
   }
-  return { transactions, incomeTransactions };
+  return { transactions, incomeTransactions, transferTransactions };
 }
 
 function parseBlock(text, owner){
@@ -1118,6 +1135,34 @@ function moveIncomeToSpending(transactionId, category){
   return cat;
 }
 
+// A row lands here purely because it LOOKED like money moving between the
+// household's own accounts — never because we know for certain what it was
+// for. Nothing here counts toward income or spending until the household (or
+// the coach, with explicit confirmation) resolves it one of three ways.
+function resolveTransferAsCategory(transactionId, category){
+  const t = state.transferTransactions.find(x => x.id === transactionId);
+  if (!t) return null;
+  const keys = categoryKeys();
+  const guess = classify(t.desc);
+  const cat = keys.includes(category) ? category : (keys.includes(guess) ? guess : 'Misc');
+  state.transferTransactions = state.transferTransactions.filter(x => x.id !== transactionId);
+  state.transactions.push({ kind:'spend', id: t.id, owner: t.owner, desc: t.desc, amount: t.amount, category: cat, dateISO: t.dateISO });
+  deriveCategoriesFromTransactions();
+  return cat;
+}
+function resolveTransferAsIncome(transactionId){
+  const t = state.transferTransactions.find(x => x.id === transactionId);
+  if (!t || t.direction !== 'in') return null;
+  state.transferTransactions = state.transferTransactions.filter(x => x.id !== transactionId);
+  state.incomeTransactions.push({ kind:'income', id: t.id, owner: t.owner, desc: t.desc, amount: t.amount, dateISO: t.dateISO, looksRecurring: isIncomeLike(t.desc), reviewed: false });
+  return true;
+}
+function ignoreTransfer(transactionId){
+  const before = state.transferTransactions.length;
+  state.transferTransactions = state.transferTransactions.filter(t => t.id !== transactionId);
+  return before !== state.transferTransactions.length;
+}
+
 function renderIncomeList(){
   const wrap = document.getElementById('incomeList');
   if (!wrap) return;
@@ -1199,6 +1244,70 @@ function renderIncomeList(){
       renderAll(['expenses','surplus','savings','freecash']);
       renderTxnList();
       renderIncomeList();
+    });
+  });
+}
+
+// Every row here looked like money moving between the household's own
+// accounts (a Zelle, a "Home Banking" transfer, a share-to-share move) —
+// never a guess we've silently acted on. Nothing here touches income or
+// spending totals until it's resolved one of three ways: assigned a real
+// spending category (e.g. "this was actually paying the mortgage from
+// savings"), confirmed as genuine income, or explicitly marked as a pure
+// transfer with no budget impact.
+function renderTransferList(){
+  const wrap = document.getElementById('transferList');
+  if (!wrap) return;
+  const countLabel = document.getElementById('transferCountLabel');
+  if (countLabel) countLabel.textContent = state.transferTransactions.length + ' to review';
+
+  if (!state.transferTransactions.length){
+    wrap.innerHTML = '<p class="text-xs text-[var(--ink-3)] py-2">Nothing to review — import transactions above.</p>';
+    return;
+  }
+  const keys = categoryKeys();
+  wrap.innerHTML = state.transferTransactions.slice().sort((a,b)=>(b.dateISO||'').localeCompare(a.dateISO||'')).map(t=>{
+    const sign = t.direction === 'in' ? '+' : '−';
+    return `
+    <div class="border-t hairline first:border-t-0 py-1.5 text-xs">
+      <div class="flex items-center gap-1.5">
+        <span class="flex-1 min-w-0 truncate" title="${escapeHtml(t.desc)}">${escapeHtml(t.desc)}</span>
+        <span class="tnum shrink-0 w-16 text-right" style="color:var(--ink-2)">${sign}${fmtUSD(t.amount)}</span>
+      </div>
+      <div class="flex items-center justify-between gap-1.5 mt-1">
+        <select class="input text-[.62rem] py-0.5 px-1 w-[110px]" data-transfer-category="${t.id}">
+          <option value="">Assign category…</option>
+          ${keys.map(k=>`<option value="${escapeHtml(k)}">→ ${escapeHtml(categoryMeta(k).label)}</option>`).join('')}
+        </select>
+        <div class="flex items-center gap-2 shrink-0">
+          ${t.direction === 'in' ? `<button class="text-[.62rem] font-semibold text-[var(--accent)]" data-transfer-income="${t.id}">Mark income</button>` : ''}
+          <button class="text-[var(--ink-3)] hover:text-[var(--critical)]" data-transfer-ignore="${t.id}" aria-label="Ignore — pure transfer, no budget impact">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('[data-transfer-category]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      if (!sel.value) return;
+      resolveTransferAsCategory(sel.dataset.transferCategory, sel.value);
+      renderAll(['expenses','surplus','savings','freecash']);
+      renderTxnList();
+      renderTransferList();
+    });
+  });
+  wrap.querySelectorAll('[data-transfer-income]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      resolveTransferAsIncome(btn.dataset.transferIncome);
+      renderTransferList();
+      renderIncomeList();
+    });
+  });
+  wrap.querySelectorAll('[data-transfer-ignore]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      ignoreTransfer(btn.dataset.transferIgnore);
+      renderTransferList();
     });
   });
 }
@@ -1714,15 +1823,17 @@ function runParse(announce){
   const spouse = parseBlock(document.getElementById('pasteSpouse').value, 'spouse');
   state.transactions = [...you.transactions, ...spouse.transactions];
   state.incomeTransactions = [...you.incomeTransactions, ...spouse.incomeTransactions];
+  state.transferTransactions = [...you.transferTransactions, ...spouse.transferTransactions];
   deriveCategoriesFromTransactions();
-  document.getElementById('parseStatus').textContent = `Parsed ${state.transactions.length} spending transaction${state.transactions.length===1?'':'s'} and ${state.incomeTransactions.length} income deposit${state.incomeTransactions.length===1?'':'s'} across both accounts.`;
+  document.getElementById('parseStatus').textContent = `Parsed ${state.transactions.length} spending transaction${state.transactions.length===1?'':'s'}, ${state.incomeTransactions.length} income deposit${state.incomeTransactions.length===1?'':'s'}, and ${state.transferTransactions.length} transfer${state.transferTransactions.length===1?'':'s'} to review across both accounts.`;
   renderAll(['expenses','surplus','savings','freecash']);
   renderTxnList();
   renderCalendar();
   renderIncomeList();
+  renderTransferList();
   renderMonthlyBreakdown();
   if (announce !== false){
-    autoReviewAfterParse(state.incomeTransactions.length, state.transactions.length);
+    autoReviewAfterParse(state.incomeTransactions.length, state.transactions.length, state.transferTransactions.length);
   }
 }
 document.getElementById('parseBtn').addEventListener('click', ()=> runParse());
@@ -1731,20 +1842,22 @@ document.getElementById('parseBtn').addEventListener('click', ()=> runParse());
 // upload, which calls runParse itself) — reviewing an import the household
 // just asked for is the kind of "explicit viewer action" live AI calls
 // should be tied to, never a background loop or timer.
-function autoReviewAfterParse(incomeCount, spendCount){
-  if (!incomeCount && !spendCount){
+function autoReviewAfterParse(incomeCount, spendCount, transferCount){
+  transferCount = transferCount || 0;
+  if (!incomeCount && !spendCount && !transferCount){
     addCoachMessage('coach', "I didn't find any transactions in that import — double check the file and try again.");
     return;
   }
   if (!sampleFn){
-    addCoachMessage('coach', `Got it — I re-sorted ${spendCount} transaction${spendCount===1?'':'s'} into your budget categories${incomeCount?`, and set aside ${incomeCount} deposit${incomeCount===1?'':'s'} for income review`:''}, and refreshed every number on the dashboard.`);
+    addCoachMessage('coach', `Got it — I re-sorted ${spendCount} transaction${spendCount===1?'':'s'} into your budget categories${incomeCount?`, set aside ${incomeCount} deposit${incomeCount===1?'':'s'} for income review`:''}${transferCount?`, and left ${transferCount} transfer${transferCount===1?'':'s'} in "Review transfers" for you to sort out`:''}, and refreshed every number on the dashboard.`);
     return;
   }
-  const instruction = `I just imported ${spendCount} spending transaction${spendCount===1?'':'s'} and ${incomeCount} income/deposit transaction${incomeCount===1?'':'s'}. Please review them in this order:
-1) Income first — call list_income_transactions and check EACH one carefully. A row landing here only means "a positive amount was found" — it is not verified income. Watch for: (a) an obvious expense that ended up here by a sign-parsing mistake (e.g. a grocery store, gas station, restaurant) — use move_income_to_spending to put it back with the right category; (b) an internal transfer between the household's own accounts (e.g. a spouse moving money between shared accounts) — use remove_income_transaction, it should never count as income or be double-counted; (c) genuine income — mark it recurring payroll or one-time with classify_income_transaction. Only after that, if a clear recurring payroll pattern is confirmed, call set_income with a monthly estimate — never estimate from unreviewed rows, and never include anything you just identified as a transfer or expense.
-2) Then spending — call list_transactions with filter "uncertain" and recategorize anything you're confident about. If several rows share the same merchant, use bulk_recategorize once instead of doing them one at a time. Ask me about anything genuinely ambiguous rather than guessing.
-3) Finally, call suggest_recurring_bills and add_bill for any clear, obviously-recurring candidates (utilities, rent, a subscription that bills monthly) — skip anything that's just a frequently-visited merchant rather than a real bill.
-Give me one concise summary: income first, then spending, then any bills you added.`;
+  const instruction = `I just imported ${spendCount} spending transaction${spendCount===1?'':'s'}, ${incomeCount} income/deposit transaction${incomeCount===1?'':'s'}, and ${transferCount} transfer${transferCount===1?'':'s'} (money that looked like it moved between our own accounts). Please review them in this order:
+1) Transfers first — call list_transfer_transactions and look them over. These are inherently ambiguous (that's why they're separated out), and I've told you before that I move money between accounts myself to fund bill payments, so a "transfer" isn't automatically meaningless to my budget. Summarize what you see — does the pattern look like routine inter-account funding, are there any unusually large ones, anything that looks like it might actually be a bill paid via transfer. Do NOT resolve any of them yourself on this first pass — leave every one for me to decide in the "Review transfers" panel (or tell you directly), since only I know what each was really for. If I later tell you what a specific transfer or pattern was for, use resolve_transfer_as_category, resolve_transfer_as_income, or ignore_transfer accordingly.
+2) Then income — call list_income_transactions and check EACH one carefully. A row landing here only means "a positive amount was found" — it is not verified income. Watch for: (a) an obvious expense that ended up here by a sign-parsing mistake (e.g. a grocery store, gas station, restaurant) — use move_income_to_spending to put it back with the right category; (b) genuine income — mark it recurring payroll or one-time with classify_income_transaction. Only after that, if a clear recurring payroll pattern is confirmed, call set_income with a monthly estimate — never estimate from unreviewed rows.
+3) Then spending — call list_transactions with filter "uncertain" and recategorize anything you're confident about. If several rows share the same merchant, use bulk_recategorize once instead of doing them one at a time. Ask me about anything genuinely ambiguous rather than guessing.
+4) Finally, call suggest_recurring_bills and add_bill for any clear, obviously-recurring candidates (utilities, rent, a subscription that bills monthly) — skip anything that's just a frequently-visited merchant rather than a real bill.
+Give me one concise summary: transfers first (with your count/pattern observation, not resolutions), then income, then spending, then any bills you added.`;
   askCoach(instruction);
 }
 
@@ -2058,6 +2171,71 @@ function buildCoachTools(){
     }
   },
   {
+    name: 'list_transfer_transactions',
+    description: 'List transactions that LOOKED like money moving between the household\'s own accounts (a Zelle, a "Home Banking" transfer, a share-to-share move) and so were held out of both income and spending. This household has said they move money between accounts themselves to fund bill payments, so a transfer is not automatically meaningless — use this to summarize patterns and flag anything unusual, not to silently resolve every row.',
+    inputSchema: { type: 'object', properties: {} },
+    execute(){
+      const shown = state.transferTransactions.slice(0, 60);
+      return {
+        totalMatching: state.transferTransactions.length, shown: shown.length,
+        truncated: state.transferTransactions.length > shown.length,
+        transactions: shown.map(t => ({ transactionId: t.id, owner: t.owner, description: t.desc, amount: Math.round(t.amount*100)/100, direction: t.direction, date: t.dateISO }))
+      };
+    }
+  },
+  {
+    name: 'resolve_transfer_as_category',
+    description: 'Resolve one transfer-review row as a real spending expense — for when the household tells you a transfer was actually them paying a bill or moving money for a real expense. Moves it into the spending list under the given category and out of transfer review. Only do this when the household has told you what it was for; never guess.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        transactionId: { type: 'string', description: 'A transactionId from list_transfer_transactions.' },
+        category: { type: 'string', description: 'An existing spending category key. Call create_category first if none fits.' }
+      },
+      required: ['transactionId','category']
+    },
+    execute({ transactionId, category }){
+      if (!state.categoryDefs.some(c => c.key === String(category))) throw new Error('Unknown category "'+category+'". Call create_category first if this should be new.');
+      const newCategory = resolveTransferAsCategory(String(transactionId), String(category));
+      if (newCategory === null) throw new Error('No transfer transaction with id "'+transactionId+'". Call list_transfer_transactions first.');
+      renderAll(['expenses','surplus','savings','freecash']);
+      if (typeof renderTxnList === 'function') renderTxnList();
+      if (typeof renderTransferList === 'function') renderTransferList();
+      return { transactionId, newCategory };
+    }
+  },
+  {
+    name: 'resolve_transfer_as_income',
+    description: 'Resolve one incoming transfer-review row as genuine income — for when the household confirms a deposit that looked like an inter-account transfer was actually real money coming into the household (not just moving between their own accounts). Moves it into income review (still unconfirmed there — recurring vs one-time still needs classify_income_transaction). Only valid for incoming (direction "in") transfers.',
+    inputSchema: {
+      type: 'object',
+      properties: { transactionId: { type: 'string', description: 'A transactionId from list_transfer_transactions (must have direction "in").' } },
+      required: ['transactionId']
+    },
+    execute({ transactionId }){
+      const ok = resolveTransferAsIncome(String(transactionId));
+      if (!ok) throw new Error('No incoming transfer transaction with id "'+transactionId+'". Call list_transfer_transactions first — only direction "in" rows can become income.');
+      if (typeof renderTransferList === 'function') renderTransferList();
+      if (typeof renderIncomeList === 'function') renderIncomeList();
+      return { transactionId, movedToIncomeReview: true };
+    }
+  },
+  {
+    name: 'ignore_transfer',
+    description: 'Confirm one transfer-review row as a pure transfer with no budget impact — removes it from transfer review permanently. Only do this when the household has told you it\'s just money moving between their own accounts (or you\'re confident from context, e.g. it\'s clearly the matching leg of another transfer you already discussed).',
+    inputSchema: {
+      type: 'object',
+      properties: { transactionId: { type: 'string', description: 'A transactionId from list_transfer_transactions.' } },
+      required: ['transactionId']
+    },
+    execute({ transactionId }){
+      const removed = ignoreTransfer(String(transactionId));
+      if (!removed) throw new Error('No transfer transaction with id "'+transactionId+'". Call list_transfer_transactions first.');
+      if (typeof renderTransferList === 'function') renderTransferList();
+      return { transactionId, ignored: true };
+    }
+  },
+  {
     name: 'list_income_transactions',
     description: 'List deposits/income found in the household\'s imported transactions, so you can tell recurring payroll apart from one-time income (a bonus, gift, tax refund, etc). Pass filter "unreviewed" (default) for ones nobody has classified yet, or "all". Each item includes a looksRecurring guess from its description (e.g. "payroll", "direct dep") — treat that as a hint, not a verdict; the description and amount pattern across dates are the real evidence.',
     inputSchema: {
@@ -2298,6 +2476,7 @@ function buildContextPrompt(d){
   const catLines = categoryKeys().map(k => `- ${categoryMeta(k).label}: ${fmtUSD(state.categories[k]||0)}/mo`).join('\n');
   const uncertainCount = state.transactions.filter(t => t.category === 'Misc').length;
   const unreviewedIncomeCount = state.incomeTransactions.filter(t => !t.reviewed).length;
+  const transferCount = state.transferTransactions.length;
   const debtLines = state.debts.length
     ? state.debts.map(x => `- ${x.name}: ${fmtUSD(x.balance)} balance, ${x.apr}% APR, ${fmtUSD(x.minPayment)}/mo minimum`).join('\n')
     : '- none';
@@ -2321,6 +2500,7 @@ ${debtLines}
 - ${uncertainCount} transaction${uncertainCount===1?'':'s'} currently sitting in Miscellaneous (the catch-all bucket) — these are the ones most likely worth reviewing.
 - Recurring bills tracked on the calendar: ${state.bills.length ? state.bills.map(b=>`${b.name} (due day ${b.dueDay})`).join(', ') : 'none yet'}.
 - Income transactions: ${state.incomeTransactions.length} total, ${unreviewedIncomeCount} not yet reviewed for recurring-vs-one-time.
+- Transfer transactions awaiting review: ${transferCount} — money that looked like it moved between the household's own accounts, held out of both income and spending until resolved. This household moves money between accounts themselves to fund bill payments, so don't assume these are meaningless; don't resolve them without the household telling you what they were for.
 
 HOW TO RESPOND:
 - Keep replies conversational and concise — normally 2-5 short sentences, longer only if asked for a step-by-step breakdown.
@@ -2329,6 +2509,7 @@ HOW TO RESPOND:
 - For "what if" or comparison questions, call simulate_scenario or compare_invest_vs_debt for exact figures instead of guessing.
 - If asked to review or clean up transactions, call list_transactions, then recategorize_transaction for the ones you're confident about (a clear merchant match to an existing or sensibly new category); if several rows share a merchant, use bulk_recategorize once rather than one at a time. For anything genuinely ambiguous — a cryptic description, a merchant that could fit more than one category, or a purchase type with no good existing category — do NOT guess: describe the transaction(s) in your reply and ask the user which category fits, or whether to create a new one, then act on their answer. Use create_category when no existing category genuinely fits, rather than forcing something into Miscellaneous or a wrong bucket.
 - Income review is not trustworthy by default — a row in list_income_transactions only means "a positive amount was found," never confirmed income. Before treating anything as income: check it isn't really an expense that got mis-signed during import (move_income_to_spending) or an internal transfer between the household's own accounts, including transfers from a named family member's account (remove_income_transaction — it should never count as income). Only call set_income off deposits you've actually confirmed recurring with classify_income_transaction.
+- Transfer review (list_transfer_transactions) holds anything that looked like the household moving money between its own accounts. Never resolve one on your own guess — this household has explicitly said they move money between accounts to fund bill payments, so "looks like a transfer" doesn't mean "doesn't matter." Ask what a transfer or pattern of transfers was for, and only then use resolve_transfer_as_category (it was really paying for something), resolve_transfer_as_income (an incoming one turned out to be real new money, not just shuffled), or ignore_transfer (confirmed as a pure internal move).
 - If the user mentions a recurring bill and when it's due, call add_bill so it shows up on the calendar and gets matched against future transactions automatically. If asked to review bills or find missing ones, call suggest_recurring_bills first.
 - Plain text with occasional **bold** around key numbers; no markdown headers or bullet lists.
 - Stay in scope: this couple's household budget, spending, saving and debt payoff. Gently redirect anything unrelated.`;
@@ -2481,6 +2662,7 @@ window.__rerenderAfterChartLoad = () => renderAll();
 renderAll();
 renderTxnList();
 renderIncomeList();
+renderTransferList();
 populateBillCategorySelect();
 populateBulkCategorySelect();
 renderBillList();
