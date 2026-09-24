@@ -254,6 +254,15 @@ h1,h2,h3,.font-display{font-family:var(--font-display);text-wrap:balance;}
         <div id="transferList" class="space-y-1 max-h-72 overflow-y-auto scrollbar-thin pr-1"></div>
       </section>
 
+      <section class="card p-4 space-y-3" id="dupSection" hidden>
+        <div class="flex items-center justify-between">
+          <h2 class="font-display font-bold text-sm">Possible duplicates</h2>
+          <span id="dupCountLabel" class="text-[.65rem] text-[var(--ink-3)]"></span>
+        </div>
+        <p class="text-xs text-[var(--ink-2)]">Same date, same amount, same description — found in more than one import. This can happen with two real accounts that share money (e.g. one spouse's paycheck deposit exported from both accounts). Genuine transfers between your own accounts are handled separately above and won't show here — this is only for what looks like the exact same event recorded twice. Keep one copy, remove the rest.</p>
+        <div id="dupList" class="space-y-2"></div>
+      </section>
+
       <section class="card p-4 space-y-3">
         <div class="flex items-center justify-between">
           <h2 class="font-display font-bold text-sm">Review transactions</h2>
@@ -1138,6 +1147,12 @@ function moveIncomeToSpending(transactionId, category){
   deriveCategoriesFromTransactions();
   return cat;
 }
+function removeTransaction(transactionId){
+  const before = state.transactions.length;
+  state.transactions = state.transactions.filter(t => t.id !== transactionId);
+  if (state.transactions.length !== before) deriveCategoriesFromTransactions();
+  return before !== state.transactions.length;
+}
 
 // A row lands here purely because it LOOKED like money moving between the
 // household's own accounts — never because we know for certain what it was
@@ -1165,6 +1180,35 @@ function ignoreTransfer(transactionId){
   const before = state.transferTransactions.length;
   state.transferTransactions = state.transferTransactions.filter(t => t.id !== transactionId);
   return before !== state.transferTransactions.length;
+}
+
+// A household with more than one real account (e.g. each spouse's own
+// checking, both feeding a shared bill-paying pot) will often export
+// overlapping date ranges — the same real deposit or charge can show up
+// once per account. Genuine transfers between the household's own accounts
+// are NOT duplicates (each leg is a real, different event on its own
+// account, and both already land in transfer review) — this only flags
+// income/spend rows that look like the exact same event recorded twice:
+// same date, same dollar amount, and a matching description prefix.
+function normalizeDescKey(desc){
+  return String(desc || '').split(' — ')[0].trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+function findPossibleDuplicates(){
+  const groups = [];
+  const scan = (list, kind) => {
+    const seen = {};
+    list.forEach(t => {
+      if (!t.dateISO) return;
+      const key = t.dateISO + '|' + t.amount.toFixed(2) + '|' + normalizeDescKey(t.desc);
+      (seen[key] = seen[key] || []).push(t);
+    });
+    Object.values(seen).forEach(group => {
+      if (group.length > 1) groups.push({ kind, transactions: group });
+    });
+  };
+  scan(state.incomeTransactions, 'income');
+  scan(state.transactions, 'spend');
+  return groups;
 }
 
 function renderIncomeList(){
@@ -1312,6 +1356,46 @@ function renderTransferList(){
     btn.addEventListener('click', ()=>{
       ignoreTransfer(btn.dataset.transferIgnore);
       renderTransferList();
+    });
+  });
+}
+
+// Hidden entirely when nothing's found — most households never see this
+// panel — so it never competes for attention with the sections that always
+// have something to do.
+function renderDuplicates(){
+  const section = document.getElementById('dupSection');
+  const wrap = document.getElementById('dupList');
+  if (!section || !wrap) return;
+  const groups = findPossibleDuplicates();
+  const countLabel = document.getElementById('dupCountLabel');
+  if (countLabel) countLabel.textContent = groups.length + ' found';
+  section.hidden = groups.length === 0;
+  if (!groups.length){ wrap.innerHTML = ''; return; }
+  const ownerLabel = o => o === 'you' ? 'Your account' : "Spouse's account";
+  wrap.innerHTML = groups.map(g => `
+    <div class="card-soft p-2.5 text-xs space-y-1.5">
+      <div class="flex items-center justify-between gap-2">
+        <span class="min-w-0 truncate font-semibold" title="${escapeHtml(g.transactions[0].desc)}">${escapeHtml(g.transactions[0].desc.split(' — ')[0])}</span>
+        <span class="tnum shrink-0">${fmtUSD(g.transactions[0].amount)} · ${escapeHtml(g.transactions[0].dateISO || '')}</span>
+      </div>
+      <div class="space-y-1">
+        ${g.transactions.map(t => `
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-[var(--ink-3)]">${escapeHtml(ownerLabel(t.owner))}</span>
+            <button class="text-[.62rem] font-semibold text-[var(--critical)]" data-dup-remove="${t.id}" data-dup-kind="${g.kind}">Remove this copy</button>
+          </div>`).join('')}
+      </div>
+    </div>`).join('');
+  wrap.querySelectorAll('[data-dup-remove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const id = btn.dataset.dupRemove;
+      if (btn.dataset.dupKind === 'income') removeIncomeTransaction(id);
+      else removeTransaction(id);
+      renderAll(['expenses','surplus','savings','freecash']);
+      renderTxnList();
+      renderIncomeList();
+      renderDuplicates();
     });
   });
 }
@@ -1835,6 +1919,7 @@ function runParse(announce){
   renderCalendar();
   renderIncomeList();
   renderTransferList();
+  renderDuplicates();
   renderMonthlyBreakdown();
   if (announce !== false){
     autoReviewAfterParse(state.incomeTransactions.length, state.transactions.length, state.transferTransactions.length);
@@ -1853,15 +1938,17 @@ function autoReviewAfterParse(incomeCount, spendCount, transferCount){
     return;
   }
   if (!sampleFn){
-    addCoachMessage('coach', `Got it — I re-sorted ${spendCount} transaction${spendCount===1?'':'s'} into your budget categories${incomeCount?`, set aside ${incomeCount} deposit${incomeCount===1?'':'s'} for income review`:''}${transferCount?`, and left ${transferCount} transfer${transferCount===1?'':'s'} in "Review transfers" for you to sort out`:''}, and refreshed every number on the dashboard.`);
+    const dupCount = findPossibleDuplicates().length;
+    addCoachMessage('coach', `Got it — I re-sorted ${spendCount} transaction${spendCount===1?'':'s'} into your budget categories${incomeCount?`, set aside ${incomeCount} deposit${incomeCount===1?'':'s'} for income review`:''}${transferCount?`, and left ${transferCount} transfer${transferCount===1?'':'s'} in "Review transfers" for you to sort out`:''}, and refreshed every number on the dashboard.${dupCount ? ` Heads up — I also found ${dupCount} possible duplicate group${dupCount===1?'':'s'} (same date/amount/description imported more than once); check "Possible duplicates" below.` : ''}`);
     return;
   }
   const instruction = `I just imported ${spendCount} spending transaction${spendCount===1?'':'s'}, ${incomeCount} income/deposit transaction${incomeCount===1?'':'s'}, and ${transferCount} transfer${transferCount===1?'':'s'} (money that looked like it moved between our own accounts). Please review them in this order:
-1) Transfers first — call list_transfer_transactions and look them over. These are inherently ambiguous (that's why they're separated out), and I've told you before that I move money between accounts myself to fund bill payments, so a "transfer" isn't automatically meaningless to my budget. Summarize what you see — does the pattern look like routine inter-account funding, are there any unusually large ones, anything that looks like it might actually be a bill paid via transfer. Do NOT resolve any of them yourself on this first pass — leave every one for me to decide in the "Review transfers" panel (or tell you directly), since only I know what each was really for. If I later tell you what a specific transfer or pattern was for, use resolve_transfer_as_category, resolve_transfer_as_income, or ignore_transfer accordingly.
-2) Then income — call list_income_transactions and check EACH one carefully. A row landing here only means "a positive amount was found" — it is not verified income. Watch for: (a) an obvious expense that ended up here by a sign-parsing mistake (e.g. a grocery store, gas station, restaurant) — use move_income_to_spending to put it back with the right category; (b) genuine income — mark it recurring payroll or one-time with classify_income_transaction. Only after that, if a clear recurring payroll pattern is confirmed, call set_income with a monthly estimate — never estimate from unreviewed rows.
-3) Then spending — call list_transactions with filter "uncertain" and recategorize anything you're confident about. If several rows share the same merchant, use bulk_recategorize once instead of doing them one at a time. Ask me about anything genuinely ambiguous rather than guessing.
-4) Finally, call suggest_recurring_bills and add_bill for any clear, obviously-recurring candidates (utilities, rent, a subscription that bills monthly) — skip anything that's just a frequently-visited merchant rather than a real bill.
-Give me one concise summary: transfers first (with your count/pattern observation, not resolutions), then income, then spending, then any bills you added.`;
+1) Transfers first — call list_transfer_transactions and look them over. These are inherently ambiguous (that's why they're separated out), and I've told you before that I move money between accounts myself to fund bill payments, so a "transfer" isn't automatically meaningless to my budget. Summarize what you see — does the pattern look like routine inter-account funding, are there any unusually large ones, anything that looks like it might actually be a bill paid via transfer. Do NOT resolve any of them yourself on this first pass — leave every one for me to decide in the "Review transfers" panel (or tell you directly), since only I know what each was really for. If I later tell you what a specific transfer or pattern was for, use resolve_transfer with the matching action.
+2) Then income — call list_income_transactions and check EACH one carefully. A row landing here only means "a positive amount was found" — it is not verified income. Watch for: (a) an obvious expense that ended up here by a sign-parsing mistake (e.g. a grocery store, gas station, restaurant) — use resolve_income_transaction (action "move_to_spending") to put it back with the right category; (b) genuine income — mark it recurring payroll or one-time with resolve_income_transaction (action "recurring" or "one_time"). Only after that, if a clear recurring payroll pattern is confirmed, call set_income with a monthly estimate — never estimate from unreviewed rows.
+3) Then spending — call list_transactions with filter "uncertain" and recategorize anything you're confident about. If several rows share the same merchant, pass matchText to recategorize once instead of doing them one at a time. Ask me about anything genuinely ambiguous rather than guessing.
+4) Then call suggest_recurring_bills and add_bill for any clear, obviously-recurring candidates (utilities, rent, a subscription that bills monthly) — skip anything that's just a frequently-visited merchant rather than a real bill.
+5) Finally, if any "Possible duplicates" were found (mentioned in your context below), flag it in your summary and point me to that panel — you have no tool to resolve those yourself.
+Give me one concise summary: transfers first (with your count/pattern observation, not resolutions), then income, then spending, then bills, then duplicates if any.`;
   askCoach(instruction);
 }
 
@@ -2073,65 +2160,66 @@ function coachRespond(raw){
 
 // ---------- live AI coach (sample capability, with page tools + graceful fallback) ----------
 let sampleFn = null;
+// The platform caps how many tools one sample() call may carry, and that cap
+// varies by viewer — a page that silently exceeds it gets every tool-using
+// call rejected the same way, indistinguishable from "AI is broken" (no
+// console access to a viewer's session to diagnose it after the fact). Once
+// known, buildCoachTools()'s output is trimmed to this length as a safety
+// net so a future added tool degrades gracefully (drops the least-essential
+// tool) instead of breaking every call again.
+let toolsMaxCount = null;
 if (typeof window.claude !== 'undefined' && typeof window.claude.use === 'function'){
-  window.claude.use('sample').then(fn => { sampleFn = fn; }).catch(()=>{});
+  window.claude.use('sample').then(fn => {
+    sampleFn = fn;
+    if (fn && typeof fn.limits === 'function'){
+      fn.limits().then(caps => { toolsMaxCount = caps?.tools?.maxCount ?? null; }).catch(()=>{});
+    }
+  }).catch(()=>{});
 }
 
 const AI_UNAVAILABLE_CODES = new Set(['not_granted','sampling_disabled','not_declared','capability_disabled','capability_removed']);
 
 // Built fresh on every call (not a static constant) so each tool's category
 // enum always reflects any categories the coach — or the user — has since added.
+// Kept deliberately small (~13 tools): the sample capability's tool-count
+// limit varies by view, and a page that keeps appending one tool per new
+// feature eventually exceeds it — every live-AI call then fails the same
+// way regardless of what's asked, which is invisible from here (no console
+// access to a viewer's session) and looks exactly like "AI is broken."
+// Related actions are collapsed into one tool with an `action`/discriminator
+// field instead of one tool per action — fewer, slightly-more-general tools
+// beats many narrow ones, and it's also fewer round-trips per task.
 function buildCoachTools(){
   // NOTE: category fields deliberately take a plain string, not a fixed
   // `enum`. Tool schemas are built once at the start of a sample() call and
-  // don't change across that call's tool-use rounds — a category created by
-  // create_category mid-conversation wouldn't appear in an enum snapshotted
-  // before it existed, which could make the coach think its own new category
-  // was invalid. execute() re-validates against live state instead, which is
+  // don't change across that call's tool-use rounds — a category created
+  // mid-conversation wouldn't appear in an enum snapshotted before it
+  // existed, which could make the coach think its own new category was
+  // invalid. execute() re-validates against live state instead, which is
   // always current even within the same multi-round call.
   const catKeys = categoryKeys();
   return [
   {
     name: 'set_category_spend',
-    description: `Set one household spending category to a new absolute monthly dollar amount and refresh the dashboard immediately. Use whenever the user states or agrees to a new spending level for a category — compute the resulting absolute amount yourself (e.g. "lowered groceries by $150" means the old amount minus $150). Category must be one that exists (current ones: ${catKeys.join(', ')}) — call create_category first for a new one, then use that exact name here, even if it's not in this list (this description was written before that call).`,
+    description: `Set one household spending category to a new absolute monthly dollar amount and refresh the dashboard immediately — creates the category first if it doesn't exist yet (safe to call even when unsure; reuses an existing one instead of failing). Use whenever the user states or agrees to a new spending level for a category — compute the resulting absolute amount yourself (e.g. "lowered groceries by $150" means the old amount minus $150). Current categories: ${catKeys.join(', ')}.`,
     inputSchema: {
       type: 'object',
       properties: {
-        category: { type: 'string', description: 'The exact key of an existing spending category — see the current list in the state above, or a name you just created with create_category.' },
+        category: { type: 'string', description: 'The category key — an existing one from the list in the state above, or a brand-new name (e.g. "Pet Care") to create it.' },
         monthlyAmount: { type: 'number', minimum: 0, description: 'The new absolute monthly dollar amount for that category.' }
       },
       required: ['category', 'monthlyAmount']
     },
     execute({ category, monthlyAmount }){
-      category = String(category);
-      if (!(category in state.categories)) throw new Error('Unknown category "'+category+'". Valid: '+categoryKeys().join(', ')+'. Call create_category first for a new one.');
+      category = addCategory(String(category));
       const amt = Math.max(0, Number(monthlyAmount) || 0);
       state.categories[category] = amt;
-      renderAll(['expenses','surplus','savings','freecash']);
-      const d = dashboard();
-      return { category, newMonthlyAmount: Math.round(amt), newSurplus: Math.round(d.surplus), newSavingsRate: Math.round(d.savingsRate*1000)/1000, newFreeCash: Math.round(d.freeCash) };
-    }
-  },
-  {
-    name: 'create_category',
-    description: 'Create a new household spending category (e.g. "Pet Care", "Childcare") when none of the existing categories genuinely fit — for a whole new budget line, or before recategorizing a transaction into something new. After creating it, use recategorize_transaction or set_category_spend to put money in it. Safe to call even if you\'re not sure a category already exists by that name — it reuses the existing one instead of failing, so an "already existed" result is not an error.',
-    inputSchema: {
-      type: 'object',
-      properties: { name: { type: 'string', minLength: 1, maxLength: 40, description: 'The new category\'s name, e.g. "Pet Care".' } },
-      required: ['name']
-    },
-    execute({ name }){
-      const alreadyExisted = categoryKeys().some(k => k.toLowerCase() === String(name||'').trim().toLowerCase());
-      const key = addCategory(name);
       renderAll(['expenses','surplus','savings','freecash']);
       if (typeof renderTxnList === 'function') renderTxnList();
       if (typeof populateBillCategorySelect === 'function') populateBillCategorySelect();
       if (typeof populateBulkCategorySelect === 'function') populateBulkCategorySelect();
-      return {
-        category: key, alreadyExisted,
-        message: alreadyExisted ? `"${key}" already existed — reused it, nothing went wrong.` : `Category "${key}" created.`,
-        existingCategories: categoryKeys()
-      };
+      const d = dashboard();
+      return { category, newMonthlyAmount: Math.round(amt), newSurplus: Math.round(d.surplus), newSavingsRate: Math.round(d.savingsRate*1000)/1000, newFreeCash: Math.round(d.freeCash) };
     }
   },
   {
@@ -2161,7 +2249,7 @@ function buildCoachTools(){
       const day = Math.round(Number(dueDay));
       if (!(day>=1 && day<=31)) throw new Error('dueDay must be between 1 and 31.');
       const cat = category ? String(category) : null;
-      if (cat && !state.categoryDefs.some(c=>c.key===cat)) throw new Error('Unknown category "'+cat+'". Call create_category first if this should be new, or omit category.');
+      if (cat && !state.categoryDefs.some(c=>c.key===cat)) throw new Error('Unknown category "'+cat+'". Call set_category_spend first to create it, or omit category.');
       const existing = state.bills.find(b=>b.name.toLowerCase()===cleanName.toLowerCase());
       if (existing){
         existing.dueDay = day;
@@ -2188,55 +2276,42 @@ function buildCoachTools(){
     }
   },
   {
-    name: 'resolve_transfer_as_category',
-    description: 'Resolve one transfer-review row as a real spending expense — for when the household tells you a transfer was actually them paying a bill or moving money for a real expense. Moves it into the spending list under the given category and out of transfer review. Only do this when the household has told you what it was for; never guess.',
+    name: 'resolve_transfer',
+    description: 'Resolve one transfer-review row one of three ways: "category" (it was really the household paying for something — moves it into spending under the given category), "income" (an incoming one turned out to be real new money, not just shuffled between the household\'s own accounts — only valid when the row\'s direction is "in"), or "ignore" (confirmed as a pure internal move, no budget impact). Get transactionId from list_transfer_transactions. Only do this when the household has told you what it was for, or you\'re confident from context (e.g. it\'s clearly the matching leg of a transfer already discussed) — never guess.',
     inputSchema: {
       type: 'object',
       properties: {
         transactionId: { type: 'string', description: 'A transactionId from list_transfer_transactions.' },
-        category: { type: 'string', description: 'An existing spending category key. Call create_category first if none fits.' }
+        action: { type: 'string', enum: ['category','income','ignore'] },
+        category: { type: 'string', description: 'Required when action is "category" — an existing spending category key, or a new name to create one.' }
       },
-      required: ['transactionId','category']
+      required: ['transactionId','action']
     },
-    execute({ transactionId, category }){
-      if (!state.categoryDefs.some(c => c.key === String(category))) throw new Error('Unknown category "'+category+'". Call create_category first if this should be new.');
-      const newCategory = resolveTransferAsCategory(String(transactionId), String(category));
-      if (newCategory === null) throw new Error('No transfer transaction with id "'+transactionId+'". Call list_transfer_transactions first.');
-      renderAll(['expenses','surplus','savings','freecash']);
-      if (typeof renderTxnList === 'function') renderTxnList();
-      if (typeof renderTransferList === 'function') renderTransferList();
-      return { transactionId, newCategory };
-    }
-  },
-  {
-    name: 'resolve_transfer_as_income',
-    description: 'Resolve one incoming transfer-review row as genuine income — for when the household confirms a deposit that looked like an inter-account transfer was actually real money coming into the household (not just moving between their own accounts). Moves it into income review (still unconfirmed there — recurring vs one-time still needs classify_income_transaction). Only valid for incoming (direction "in") transfers.',
-    inputSchema: {
-      type: 'object',
-      properties: { transactionId: { type: 'string', description: 'A transactionId from list_transfer_transactions (must have direction "in").' } },
-      required: ['transactionId']
-    },
-    execute({ transactionId }){
-      const ok = resolveTransferAsIncome(String(transactionId));
-      if (!ok) throw new Error('No incoming transfer transaction with id "'+transactionId+'". Call list_transfer_transactions first — only direction "in" rows can become income.');
-      if (typeof renderTransferList === 'function') renderTransferList();
-      if (typeof renderIncomeList === 'function') renderIncomeList();
-      return { transactionId, movedToIncomeReview: true };
-    }
-  },
-  {
-    name: 'ignore_transfer',
-    description: 'Confirm one transfer-review row as a pure transfer with no budget impact — removes it from transfer review permanently. Only do this when the household has told you it\'s just money moving between their own accounts (or you\'re confident from context, e.g. it\'s clearly the matching leg of another transfer you already discussed).',
-    inputSchema: {
-      type: 'object',
-      properties: { transactionId: { type: 'string', description: 'A transactionId from list_transfer_transactions.' } },
-      required: ['transactionId']
-    },
-    execute({ transactionId }){
-      const removed = ignoreTransfer(String(transactionId));
-      if (!removed) throw new Error('No transfer transaction with id "'+transactionId+'". Call list_transfer_transactions first.');
-      if (typeof renderTransferList === 'function') renderTransferList();
-      return { transactionId, ignored: true };
+    execute({ transactionId, action, category }){
+      transactionId = String(transactionId);
+      if (action === 'category'){
+        if (!category) throw new Error('category is required when action is "category".');
+        const newCategory = resolveTransferAsCategory(transactionId, addCategory(String(category)));
+        if (newCategory === null) throw new Error('No transfer transaction with id "'+transactionId+'". Call list_transfer_transactions first.');
+        renderAll(['expenses','surplus','savings','freecash']);
+        if (typeof renderTxnList === 'function') renderTxnList();
+        if (typeof renderTransferList === 'function') renderTransferList();
+        return { transactionId, action, newCategory };
+      }
+      if (action === 'income'){
+        const ok = resolveTransferAsIncome(transactionId);
+        if (!ok) throw new Error('No incoming transfer transaction with id "'+transactionId+'". Call list_transfer_transactions first — only direction "in" rows can become income.');
+        if (typeof renderTransferList === 'function') renderTransferList();
+        if (typeof renderIncomeList === 'function') renderIncomeList();
+        return { transactionId, action, movedToIncomeReview: true };
+      }
+      if (action === 'ignore'){
+        const removed = ignoreTransfer(transactionId);
+        if (!removed) throw new Error('No transfer transaction with id "'+transactionId+'". Call list_transfer_transactions first.');
+        if (typeof renderTransferList === 'function') renderTransferList();
+        return { transactionId, action, ignored: true };
+      }
+      throw new Error('action must be "category", "income", or "ignore".');
     }
   },
   {
@@ -2258,65 +2333,47 @@ function buildCoachTools(){
     }
   },
   {
-    name: 'classify_income_transaction',
-    description: 'Mark one income/deposit transaction as recurring payroll or one-time income. Get transactionId values from list_income_transactions.',
+    name: 'resolve_income_transaction',
+    description: 'Resolve one income-review row one of four ways: "recurring" or "one_time" (genuine income — classify which), "remove" (never income at all: an internal transfer, or an expense that landed here by a sign-parsing mistake — removed from everywhere, not counted), or "move_to_spending" (it\'s actually a real expense, not income — moves it into spending under a category, auto-classified if omitted). Get transactionId from list_income_transactions.',
     inputSchema: {
       type: 'object',
       properties: {
         transactionId: { type: 'string', description: 'A transactionId from list_income_transactions.' },
-        kind: { type: 'string', enum: ['recurring','one_time'] }
+        action: { type: 'string', enum: ['recurring','one_time','remove','move_to_spending'] },
+        category: { type: 'string', description: 'Only used when action is "move_to_spending" — an existing category key (or a new name to create one), or omit to auto-classify from the description.' }
       },
-      required: ['transactionId','kind']
+      required: ['transactionId','action']
     },
-    execute({ transactionId, kind }){
-      const t = state.incomeTransactions.find(x => x.id === String(transactionId));
-      if (!t) throw new Error('No income transaction with id "'+transactionId+'". Call list_income_transactions first.');
-      if (kind !== 'recurring' && kind !== 'one_time') throw new Error('kind must be "recurring" or "one_time".');
-      t.reviewed = true;
-      t.recurring = kind === 'recurring';
-      if (typeof renderIncomeList === 'function') renderIncomeList();
-      return { transactionId, description: t.desc, kind };
-    }
-  },
-  {
-    name: 'remove_income_transaction',
-    description: 'Permanently remove one row from income review — for something that was never income at all: an internal transfer between the household\'s own accounts, or an expense that ended up here by mistake (a parsing sign error). It will not be counted anywhere. If it\'s actually a real expense rather than pure noise, use move_income_to_spending instead so the dollar amount is preserved in the right category.',
-    inputSchema: {
-      type: 'object',
-      properties: { transactionId: { type: 'string', description: 'A transactionId from list_income_transactions.' } },
-      required: ['transactionId']
-    },
-    execute({ transactionId }){
-      const removed = removeIncomeTransaction(String(transactionId));
-      if (!removed) throw new Error('No income transaction with id "'+transactionId+'". Call list_income_transactions first.');
-      if (typeof renderIncomeList === 'function') renderIncomeList();
-      return { transactionId, removed: true };
-    }
-  },
-  {
-    name: 'move_income_to_spending',
-    description: 'Reclassify a row from income review as a real expense instead — for a transaction that\'s sitting in income by mistake (e.g. a sign-detection error made a purchase look like a deposit) but is genuinely spending, not noise. Moves it into the spending list under the given category (or an auto-guessed one if omitted) and removes it from income. If it\'s actually pure noise (a transfer), use remove_income_transaction instead.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        transactionId: { type: 'string', description: 'A transactionId from list_income_transactions.' },
-        category: { type: 'string', description: 'An existing spending category key. Omit to let it auto-classify from the description.' }
-      },
-      required: ['transactionId']
-    },
-    execute({ transactionId, category }){
-      if (category && !state.categoryDefs.some(c => c.key === String(category))) throw new Error('Unknown category "'+category+'". Call create_category first, or omit category to auto-classify.');
-      const newCategory = moveIncomeToSpending(String(transactionId), category ? String(category) : null);
-      if (newCategory === null) throw new Error('No income transaction with id "'+transactionId+'". Call list_income_transactions first.');
-      renderAll(['expenses','surplus','savings','freecash']);
-      if (typeof renderTxnList === 'function') renderTxnList();
-      if (typeof renderIncomeList === 'function') renderIncomeList();
-      return { transactionId, newCategory };
+    execute({ transactionId, action, category }){
+      transactionId = String(transactionId);
+      if (action === 'recurring' || action === 'one_time'){
+        const t = state.incomeTransactions.find(x => x.id === transactionId);
+        if (!t) throw new Error('No income transaction with id "'+transactionId+'". Call list_income_transactions first.');
+        t.reviewed = true;
+        t.recurring = action === 'recurring';
+        if (typeof renderIncomeList === 'function') renderIncomeList();
+        return { transactionId, action, description: t.desc };
+      }
+      if (action === 'remove'){
+        const removed = removeIncomeTransaction(transactionId);
+        if (!removed) throw new Error('No income transaction with id "'+transactionId+'". Call list_income_transactions first.');
+        if (typeof renderIncomeList === 'function') renderIncomeList();
+        return { transactionId, action, removed: true };
+      }
+      if (action === 'move_to_spending'){
+        const newCategory = moveIncomeToSpending(transactionId, category ? addCategory(String(category)) : null);
+        if (newCategory === null) throw new Error('No income transaction with id "'+transactionId+'". Call list_income_transactions first.');
+        renderAll(['expenses','surplus','savings','freecash']);
+        if (typeof renderTxnList === 'function') renderTxnList();
+        if (typeof renderIncomeList === 'function') renderIncomeList();
+        return { transactionId, action, newCategory };
+      }
+      throw new Error('action must be "recurring", "one_time", "remove", or "move_to_spending".');
     }
   },
   {
     name: 'set_income',
-    description: 'Set one person\'s monthly income and refresh the dashboard. Only call this after confirming a recurring payroll pattern with classify_income_transaction (kind: "recurring") on the relevant deposits — never from an unreviewed looksRecurring guess, which can include misclassified expenses or transfers. Confirm the figure with the user in your reply rather than silently overwriting an existing value they may have set deliberately.',
+    description: 'Set one person\'s monthly income and refresh the dashboard. Only call this after confirming a recurring payroll pattern with resolve_income_transaction (action: "recurring") on the relevant deposits — never from an unreviewed looksRecurring guess, which can include misclassified expenses or transfers. Confirm the figure with the user in your reply rather than silently overwriting an existing value they may have set deliberately.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2355,77 +2412,60 @@ function buildCoachTools(){
     }
   },
   {
-    name: 'recategorize_transaction',
-    description: `Move one transaction to a different category and refresh the dashboard. Get transactionId values from list_transactions first. Category must be one that exists (current ones: ${catKeys.join(', ')}) — call create_category first for a brand-new one, then use that exact name here, even if it's not in this list (this description was written before that call). If you are genuinely unsure which category fits a transaction, don't guess: describe it to the user and ask, rather than calling this blind.`,
+    name: 'recategorize',
+    description: `Move transaction(s) to a different category and refresh the dashboard — creates the category first if it doesn't exist yet. Pass EITHER transactionId (one specific transaction, from list_transactions) OR matchText (every transaction whose description contains this text, case-insensitive, e.g. "kroger" — the fast way to clear a whole merchant out of Miscellaneous at once), never both. Current categories: ${catKeys.join(', ')}. If you are genuinely unsure which category fits, don't guess: describe it to the user and ask, rather than calling this blind.`,
     inputSchema: {
       type: 'object',
       properties: {
-        transactionId: { type: 'string', description: 'A transactionId from list_transactions.' },
-        category: { type: 'string', description: 'The exact key of an existing category to move it to — see the current list in the state above, or a name you just created with create_category.' }
+        transactionId: { type: 'string', description: 'A transactionId from list_transactions — for one specific transaction.' },
+        matchText: { type: 'string', minLength: 1, description: 'Text to match against descriptions, case-insensitive — for every matching transaction at once.' },
+        category: { type: 'string', description: 'The category key to move it/them to — existing, or a new name to create one.' }
       },
-      required: ['transactionId','category']
+      required: ['category']
     },
-    execute({ transactionId, category }){
-      const t = state.transactions.find(x => x.id === String(transactionId));
-      if (!t) throw new Error('No transaction with id "'+transactionId+'". Call list_transactions first to get valid ids.');
-      category = String(category);
-      if (!state.categoryDefs.some(c => c.key === category)) throw new Error('Unknown category "'+category+'". Call create_category first if this should be new. Valid: '+categoryKeys().join(', '));
-      const previousCategory = t.category;
-      t.category = category;
-      deriveCategoriesFromTransactions();
-      renderAll(['expenses','surplus','savings','freecash']);
-      if (typeof renderTxnList === 'function') renderTxnList();
-      return { transactionId, description: t.desc, previousCategory, newCategory: category };
+    execute({ transactionId, matchText, category }){
+      category = addCategory(String(category));
+      if (transactionId){
+        const t = state.transactions.find(x => x.id === String(transactionId));
+        if (!t) throw new Error('No transaction with id "'+transactionId+'". Call list_transactions first to get valid ids.');
+        const previousCategory = t.category;
+        t.category = category;
+        deriveCategoriesFromTransactions();
+        renderAll(['expenses','surplus','savings','freecash']);
+        if (typeof renderTxnList === 'function') renderTxnList();
+        return { transactionId, description: t.desc, previousCategory, newCategory: category };
+      }
+      if (matchText){
+        const result = bulkRecategorize(matchText, category);
+        if (result.updatedCount === 0) throw new Error('No transactions matched "'+matchText+'".');
+        renderAll(['expenses','surplus','savings','freecash']);
+        if (typeof renderTxnList === 'function') renderTxnList();
+        return result;
+      }
+      throw new Error('Pass either transactionId or matchText.');
     }
   },
   {
-    name: 'bulk_recategorize',
-    description: 'Move every transaction whose description contains a given text (case-insensitive, e.g. "kroger") to a category, in one call — the fast way to clear a merchant out of Miscellaneous once instead of one row at a time. Category must already exist; call create_category first for a new one.',
+    name: 'set_debt_plan',
+    description: "Update the household's debt payoff plan and refresh projections — pass strategy, extraMonthly, or both. strategy switches between avalanche (highest APR first — usually least total interest) and snowball (smallest balance first — faster early wins). extraMonthly sets the extra monthly payment toward debt beyond required minimums. Use when the user agrees to a specific extra amount and/or strategy.",
     inputSchema: {
       type: 'object',
       properties: {
-        matchText: { type: 'string', minLength: 1, description: 'Text to match against transaction descriptions, case-insensitive (e.g. a merchant name).' },
-        category: { type: 'string', description: 'The exact key of an existing category to move all matches to.' }
-      },
-      required: ['matchText','category']
+        strategy: { type: 'string', enum: ['avalanche','snowball'] },
+        extraMonthly: { type: 'number', minimum: 0, description: 'New extra monthly dollar amount toward debt, beyond minimums.' }
+      }
     },
-    execute({ matchText, category }){
-      category = String(category);
-      if (!state.categoryDefs.some(c => c.key === category)) throw new Error('Unknown category "'+category+'". Call create_category first if this should be new. Valid: '+categoryKeys().join(', '));
-      const result = bulkRecategorize(matchText, category);
-      if (result.updatedCount === 0) throw new Error('No transactions matched "'+matchText+'".');
-      renderAll(['expenses','surplus','savings','freecash']);
-      if (typeof renderTxnList === 'function') renderTxnList();
-      return result;
-    }
-  },
-  {
-    name: 'set_extra_debt_payment',
-    description: "Set the household's extra monthly payment toward debt, beyond required minimums, and refresh the payoff timeline. Use when the user agrees to put a specific extra amount toward debt.",
-    inputSchema: {
-      type: 'object',
-      properties: { monthlyAmount: { type: 'number', minimum: 0, description: 'New extra monthly dollar amount toward debt, beyond minimums.' } },
-      required: ['monthlyAmount']
-    },
-    execute({ monthlyAmount }){
-      const amt = Math.max(0, Number(monthlyAmount) || 0);
-      state.extraPayment = amt;
+    execute({ strategy, extraMonthly }){
+      if (strategy == null && extraMonthly == null) throw new Error('Pass strategy, extraMonthly, or both.');
+      if (strategy != null){
+        strategy = String(strategy);
+        if (strategy !== 'avalanche' && strategy !== 'snowball') throw new Error('strategy must be "avalanche" or "snowball"');
+        state.strategy = strategy;
+      }
+      if (extraMonthly != null) state.extraPayment = Math.max(0, Number(extraMonthly) || 0);
       renderAll(['surplus','freecash','interest','freedate']);
       const d = dashboard();
-      return { newExtraPayment: Math.round(amt), debtFreeDate: fmtMonthYear(addMonths(TODAY, d.payoff.months)), monthsToDebtFree: d.payoff.months, totalInterest: Math.round(d.payoff.totalInterest) };
-    }
-  },
-  {
-    name: 'set_strategy',
-    description: 'Switch the payoff strategy between avalanche (highest APR balance first — usually least total interest) and snowball (smallest balance first — faster early wins), and refresh projections.',
-    inputSchema: { type: 'object', properties: { strategy: { type: 'string', enum: ['avalanche','snowball'] } }, required: ['strategy'] },
-    execute({ strategy }){
-      strategy = String(strategy);
-      if (strategy !== 'avalanche' && strategy !== 'snowball') throw new Error('strategy must be "avalanche" or "snowball"');
-      state.strategy = strategy;
-      renderAll(['interest','freedate']);
-      const d = dashboard();
-      return { strategy, monthsToDebtFree: d.payoff.months, totalInterest: Math.round(d.payoff.totalInterest), debtFreeDate: fmtMonthYear(addMonths(TODAY, d.payoff.months)) };
+      return { strategy: state.strategy, newExtraPayment: Math.round(state.extraPayment), debtFreeDate: fmtMonthYear(addMonths(TODAY, d.payoff.months)), monthsToDebtFree: d.payoff.months, totalInterest: Math.round(d.payoff.totalInterest) };
     }
   },
   {
@@ -2481,6 +2521,7 @@ function buildContextPrompt(d){
   const uncertainCount = state.transactions.filter(t => t.category === 'Misc').length;
   const unreviewedIncomeCount = state.incomeTransactions.filter(t => !t.reviewed).length;
   const transferCount = state.transferTransactions.length;
+  const duplicateGroupCount = findPossibleDuplicates().length;
   const debtLines = state.debts.length
     ? state.debts.map(x => `- ${x.name}: ${fmtUSD(x.balance)} balance, ${x.apr}% APR, ${fmtUSD(x.minPayment)}/mo minimum`).join('\n')
     : '- none';
@@ -2505,15 +2546,17 @@ ${debtLines}
 - Recurring bills tracked on the calendar: ${state.bills.length ? state.bills.map(b=>`${b.name} (due day ${b.dueDay})`).join(', ') : 'none yet'}.
 - Income transactions: ${state.incomeTransactions.length} total, ${unreviewedIncomeCount} not yet reviewed for recurring-vs-one-time.
 - Transfer transactions awaiting review: ${transferCount} — money that looked like it moved between the household's own accounts, held out of both income and spending until resolved. This household moves money between accounts themselves to fund bill payments, so don't assume these are meaningless; don't resolve them without the household telling you what they were for.
+- Possible duplicate transactions: ${duplicateGroupCount} group${duplicateGroupCount===1?'':'s'} — same date, amount and description found more than once (typically the same real transaction imported from two overlapping account exports). There is no tool for this; the household resolves it in the "Possible duplicates" panel.
 
 HOW TO RESPOND:
 - Keep replies conversational and concise — normally 2-5 short sentences, longer only if asked for a step-by-step breakdown.
 - Ground every number in the state above or in a tool result — never estimate math a tool could compute exactly.
 - When the user states or clearly agrees to a concrete change (a new spending level, an extra debt payment amount, a strategy switch), actually CALL the matching tool to apply it — don't just say you will — then explain what changed (new debt-free date, interest saved, etc.).
 - For "what if" or comparison questions, call simulate_scenario or compare_invest_vs_debt for exact figures instead of guessing.
-- If asked to review or clean up transactions, call list_transactions, then recategorize_transaction for the ones you're confident about (a clear merchant match to an existing or sensibly new category); if several rows share a merchant, use bulk_recategorize once rather than one at a time. For anything genuinely ambiguous — a cryptic description, a merchant that could fit more than one category, or a purchase type with no good existing category — do NOT guess: describe the transaction(s) in your reply and ask the user which category fits, or whether to create a new one, then act on their answer. Use create_category when no existing category genuinely fits, rather than forcing something into Miscellaneous or a wrong bucket.
-- Income review is not trustworthy by default — a row in list_income_transactions only means "a positive amount was found," never confirmed income. Before treating anything as income: check it isn't really an expense that got mis-signed during import (move_income_to_spending) or an internal transfer between the household's own accounts, including transfers from a named family member's account (remove_income_transaction — it should never count as income). Only call set_income off deposits you've actually confirmed recurring with classify_income_transaction.
-- Transfer review (list_transfer_transactions) holds anything that looked like the household moving money between its own accounts. Never resolve one on your own guess — this household has explicitly said they move money between accounts to fund bill payments, so "looks like a transfer" doesn't mean "doesn't matter." Ask what a transfer or pattern of transfers was for, and only then use resolve_transfer_as_category (it was really paying for something), resolve_transfer_as_income (an incoming one turned out to be real new money, not just shuffled), or ignore_transfer (confirmed as a pure internal move).
+- If asked to review or clean up transactions, call list_transactions, then recategorize (pass transactionId for one, or matchText to clear a whole merchant out of Miscellaneous at once) for the ones you're confident about — it creates a new category automatically if none existing fits. For anything genuinely ambiguous — a cryptic description, a merchant that could fit more than one category, or a purchase type with no good existing category — do NOT guess: describe the transaction(s) in your reply and ask the user which category fits, or whether to create a new one, then act on their answer.
+- Income review is not trustworthy by default — a row in list_income_transactions only means "a positive amount was found," never confirmed income. Before treating anything as income, check with resolve_income_transaction: "move_to_spending" for an expense that got mis-signed during import, "remove" for an internal transfer or other noise (never counted), or "recurring"/"one_time" for genuine income. Only call set_income off deposits actually confirmed recurring.
+- Transfer review (list_transfer_transactions) holds anything that looked like the household moving money between its own accounts. Never resolve one on your own guess — this household has explicitly said they move money between accounts to fund bill payments, so "looks like a transfer" doesn't mean "doesn't matter." Ask what a transfer or pattern of transfers was for, and only then use resolve_transfer with the matching action ("category" — it was really paying for something; "income" — an incoming one turned out to be real new money; "ignore" — confirmed as a pure internal move).
+- Possible duplicate transactions (flagged below) mean the same real transaction may have been imported from more than one account export. There is no tool for this — point the household to the "Possible duplicates" panel to resolve it themselves; don't guess which copy to keep.
 - If the user mentions a recurring bill and when it's due, call add_bill so it shows up on the calendar and gets matched against future transactions automatically. If asked to review bills or find missing ones, call suggest_recurring_bills first.
 - Plain text with occasional **bold** around key numbers; no markdown headers or bullet lists.
 - Stay in scope: this couple's household budget, spending, saving and debt payoff. Gently redirect anything unrelated.`;
@@ -2582,11 +2625,13 @@ async function askCoach(userText){
       ...chatTurns.slice(-8),
       { role: 'user', content: userText }
     ];
+    let tools = buildCoachTools();
+    if (toolsMaxCount != null && tools.length > toolsMaxCount) tools = tools.slice(0, toolsMaxCount);
     const { text } = await sampleFn(turns, {
       modelTier: 'quick',
       cache: false,
       signal: ctl.signal,
-      tools: buildCoachTools(),
+      tools,
       onText: (u) => updateCoachStream(entry, u.text)
     });
     updateCoachStream(entry, text);
@@ -2667,6 +2712,7 @@ renderAll();
 renderTxnList();
 renderIncomeList();
 renderTransferList();
+renderDuplicates();
 populateBillCategorySelect();
 populateBulkCategorySelect();
 renderBillList();
