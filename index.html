@@ -545,6 +545,10 @@ const CATEGORY_RULES = [
   [/rent|mortgage|apartment|property\s?mgmt|landlord/i, 'Home/Mortgage'],
   [/home\s?depot|lowe'?s|menards|ace\s?hardware|hardware\s?store|tractor\s?supply/i, 'Home Improvement'],
   [/amazon|wayfair|\bikea\b|bed\s?bath|homegoods|home\s?goods|pottery\s?barn/i, 'Home Goods'],
+  // Grocery-chain gas stations (checked ahead of the plain Groceries rule below,
+  // since "Kroger Fuel"/"Walmart Fuel" would otherwise match on the chain name
+  // alone and get filed as groceries instead of fuel).
+  [/kroger\s?fuel|wal[\s-]?mart\s?fuel|safeway\s?fuel|meijer\s?gas|\bfuel\s?center\b/i, 'Fuel'],
   [/kroger|whole\s?foods|trader\s?joe|safeway|aldi|wal[\s-]?mart|publix|grocery|market\s?basket|harris\s?teeter/i, 'Groceries'],
   [/shell\b|speedway|chevron|exxon|mobil\b|\bbp\b|marathon|circle\s?k|sunoco|gas\s?station|fuel/i, 'Fuel'],
   [/\bcvs\b|walgreens|pharmacy|urgent\s?care|\bclinic\b|\bdentist\b|\bhospital\b|\bdoctor\b|medical|carelonrx/i, 'Pharmacy/Medical'],
